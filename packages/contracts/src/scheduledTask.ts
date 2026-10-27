@@ -206,6 +206,8 @@ export const ScheduledTask = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  /** Settle each run's thread once that run completes. Absent means off. */
+  autoSettle: Schema.optional(Schema.Boolean),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   createdAt: IsoDateTime,
@@ -243,6 +245,9 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  autoSettle: Schema.optional(Schema.Boolean).annotate({
+    description: "Omitted keeps the stored value, so older clients cannot clear it.",
+  }),
   createdBy: Schema.optional(OrchestrationV2Actor),
   creationSource: Schema.optional(OrchestrationV2CreationSource),
 });

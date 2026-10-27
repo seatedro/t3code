@@ -661,6 +661,17 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
       description: "Default true: runs post in this thread. False: new thread per run.",
     }),
   ),
+  autoSettle: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Default false. True: settle the run's thread when the run completes.",
+    }),
+  ),
+  baseRef: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "New-thread runs only: branch each run's worktree starts from, fetched from origin. Default: the repo's default branch.",
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -685,6 +696,8 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  autoSettle: Schema.Boolean,
+  baseRef: Schema.optional(Schema.String),
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
       "Public URL for the sender. Absent: no T3 Connect tunnel. The user must enable T3 Connect remote access.",
@@ -721,6 +734,8 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  autoSettle: Schema.optional(Schema.Boolean),
+  baseRef: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;

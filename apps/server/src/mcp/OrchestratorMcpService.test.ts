@@ -2360,6 +2360,88 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
 
+    it.effect("starts new-thread runs from a chosen branch only when it exists", () =>
+      Effect.gen(function* () {
+        const unbound = task({ workspaceStrategy: { type: "worktree", baseRef: "main" } });
+        const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
+        const layer = OrchestratorMcpService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              checkWorktreeBase: ({ projectId: checkedProjectId, workspaceStrategy }) =>
+                workspaceStrategy?.type === "worktree" &&
+                workspaceStrategy.baseRef === "rohit/changes"
+                  ? Effect.void
+                  : Effect.fail(
+                      new ThreadLaunchService.ThreadLaunchBaseRefError({
+                        projectId: checkedProjectId,
+                        projectTitle: "Scheduled",
+                        workspaceRoot: "/repo",
+                        baseRef:
+                          workspaceStrategy?.type === "worktree" ? workspaceStrategy.baseRef : "",
+                      }),
+                    ),
+            }),
+          ),
+          Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+          Layer.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+              Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+              ServerSettings.layerTest(),
+              Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+              Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                list: () => Effect.succeed([]),
+              }),
+              Layer.mock(ProjectService.ProjectService)({
+                getById: (id) =>
+                  Effect.succeedSome({
+                    id,
+                    title: "Scheduled",
+                    workspaceRoot: "/repo",
+                    repositoryIdentity: null,
+                    faviconPath: null,
+                    defaultModelSelection: null,
+                    defaultThreadEnvMode: null,
+                    scripts: [],
+                    createdAt: "2026-10-05T00:00:00.000Z",
+                    updatedAt: "2026-10-05T00:00:00.000Z",
+                    deletedAt: null,
+                  }),
+              }),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+              Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+                list: () => Effect.succeed({ tasks: [unbound] }),
+                upsert: (input) =>
+                  Ref.update(saved, (all) => [...all, input.workspaceStrategy]).pipe(
+                    Effect.as({ task: { ...unbound, workspaceStrategy: input.workspaceStrategy } }),
+                  ),
+              }),
+            ),
+          ),
+        );
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(layer),
+        );
+
+        const updated = yield* mcp.updateScheduledTask(supervisedClient, {
+          scheduledTaskId: unbound.id,
+          baseRef: "rohit/changes",
+        });
+        assert.equal(updated.baseRef, "rohit/changes");
+        const error = yield* mcp
+          .updateScheduledTask(supervisedClient, {
+            scheduledTaskId: unbound.id,
+            baseRef: "no-such-branch",
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.code, "invalid_request");
+        assert.deepEqual(yield* Ref.get(saved), [
+          { type: "worktree", baseRef: "rohit/changes", startFromOrigin: true },
+        ]);
+      }),
+    );
+
     it.effect("reports a saved task even when its bound thread cannot be read", () =>
       Effect.gen(function* () {
         const upserted = yield* Ref.make(0);
