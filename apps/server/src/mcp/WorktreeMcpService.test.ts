@@ -8,6 +8,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  VcsUnsupportedOperationError,
   WorktreeMcpHandoffInput,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -32,6 +33,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as JjWorkspaceRepair from "../vcs/jj/JjWorkspaceRepair.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 
@@ -113,6 +115,7 @@ interface HarnessOptions {
   readonly removeWorktreeFails?: boolean;
   readonly deleteLocalBranchFails?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
+  readonly notJj?: boolean;
 }
 
 const makeHarness = (options: HarnessOptions = {}) => {
@@ -288,6 +291,18 @@ const makeHarness = (options: HarnessOptions = {}) => {
     }
   });
 
+  const repairWorkspace = vi.fn((_: { readonly cwd: string }) =>
+    options.notJj
+      ? Effect.fail(
+          new VcsUnsupportedOperationError({
+            operation: "JjWorkspaceRepair.repair",
+            kind: "jj",
+            detail: "No jj workspace was detected.",
+          }),
+        )
+      : Effect.succeed({ repaired: false } as const),
+  );
+
   const layer = WorktreeMcpService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -318,6 +333,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
         Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
           refreshStatus,
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
+        Layer.mock(JjWorkspaceRepair.JjWorkspaceRepair)({ repair: repairWorkspace }),
         NodeServices.layer,
       ),
     ),
@@ -334,6 +350,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     deleteLocalBranch,
     localStatus,
     runForThread,
+    repairWorkspace,
   };
 };
 
@@ -686,6 +703,38 @@ describe("t3_worktree_status", () => {
         branch: "feature/existing",
         defaultStartFromOrigin: false,
       });
+    });
+  });
+});
+
+describe("t3_worktree_repair", () => {
+  it.effect("repairs the thread's worktree, else the project root", () =>
+    Effect.gen(function* () {
+      for (const [worktreePath, cwd] of [
+        ["/worktrees/project/existing", "/worktrees/project/existing"],
+        [null, workspaceRoot],
+      ] as const) {
+        const harness = makeHarness({ thread: { worktreePath } });
+        const result = yield* WorktreeMcpService.WorktreeMcpService.pipe(
+          Effect.flatMap((service) => service.repair(harness.scope)),
+          Effect.provide(harness.layer),
+        );
+        expect(result).toEqual({ repaired: false });
+        expect(harness.repairWorkspace).toHaveBeenCalledWith({ cwd });
+      }
+    }),
+  );
+
+  it.effect("reports a checkout that is not jj as an invalid request", () => {
+    const harness = makeHarness({ notJj: true });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        WorktreeMcpService.WorktreeMcpService.pipe(
+          Effect.flatMap((service) => service.repair(harness.scope)),
+          Effect.provide(harness.layer),
+        ),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
     });
   });
 });

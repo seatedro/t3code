@@ -354,6 +354,13 @@ export function createVcsEnvironmentAtoms<R, E>(
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
+    repairWorkspace: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:repair-workspace",
+      tag: WS_METHODS.vcsRepairWorkspace,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+      onSettled: invalidateRefs,
+    }),
   };
 }
 
@@ -361,3 +368,4 @@ export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
 export * from "./vcsStatusRevalidation.ts";
+export * from "./vcsWorkspaceRepair.ts";

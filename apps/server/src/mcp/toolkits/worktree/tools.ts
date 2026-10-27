@@ -7,6 +7,7 @@ import {
   WorktreeMcpHandoffResult,
   WorktreeMcpStatusResult,
   ThreadId,
+  VcsRepairWorkspaceResult,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
@@ -58,6 +59,20 @@ const WorktreeStatusTool = Tool.make("t3_worktree_status", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const WorktreeRepairTool = Tool.make("t3_worktree_repair", {
+  description:
+    'Repair THIS thread\'s stale jj workspace, after jj reports "The working copy is stale" or "Could not read working copy\'s operation". Saves the files on disk under a git ref first. Never run `jj workspace update-stale` or `jj converge` yourself. Tell the user the ref and any divergent changes.',
+  success: VcsRepairWorkspaceResult,
+  failure: WorktreeToolFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Repair a stale jj workspace")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 const WorktreeListTool = Tool.make("t3_worktree_list", {
   description:
     "List branch refs and checkout paths for a thread's workspace. Omit `threadId` for this thread. Detached worktrees with no branch are left out.",
@@ -84,5 +99,6 @@ const WorktreeListTool = Tool.make("t3_worktree_list", {
 export const WorktreeToolkit = Toolkit.make(
   WorktreeHandoffTool,
   WorktreeStatusTool,
+  WorktreeRepairTool,
   WorktreeListTool,
 );

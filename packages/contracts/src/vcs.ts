@@ -307,3 +307,26 @@ export const VcsStatusVcs = Schema.Struct({
   problem: Schema.optional(VcsWorkspaceProblem),
 });
 export type VcsStatusVcs = typeof VcsStatusVcs.Type;
+
+export const VcsRepairWorkspaceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type VcsRepairWorkspaceInput = typeof VcsRepairWorkspaceInput.Type;
+
+export const VcsRepairWorkspaceResult = Schema.Union([
+  Schema.Struct({
+    repaired: Schema.Literal(true),
+    preservedRef: TrimmedNonEmptyString.annotate({
+      description: "Git ref holding the workspace files as they were on disk before the repair.",
+    }),
+    divergentChangeIds: Schema.Array(TrimmedNonEmptyString).annotate({
+      description: "Divergent jj changes, left for the user to resolve.",
+    }),
+  }),
+  Schema.Struct({
+    repaired: Schema.Literal(false).annotate({
+      description: "The workspace was not stale, so nothing changed.",
+    }),
+  }),
+]);
+export type VcsRepairWorkspaceResult = typeof VcsRepairWorkspaceResult.Type;
