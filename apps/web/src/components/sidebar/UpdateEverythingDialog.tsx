@@ -47,6 +47,7 @@ interface UpdateEverythingDialogProps {
   readonly rows: ReadonlyArray<UpdateEverythingRow>;
   readonly restarts: ReadonlyArray<RestartingMachine>;
   readonly onConfirm: () => void;
+  readonly onConfirmAppOnly?: () => void;
 }
 
 type UpdateEverythingDialogContentProps = Omit<
@@ -88,6 +89,7 @@ function UpdateEverythingDialogContent({
   rows,
   restarts,
   onConfirm,
+  onConfirmAppOnly,
   cancelRef,
 }: UpdateEverythingDialogContentProps) {
   const stopped = useAtomValue(
@@ -208,6 +210,11 @@ function UpdateEverythingDialogContent({
         <AlertDialogClose ref={cancelRef} render={<Button variant="outline" />}>
           Cancel
         </AlertDialogClose>
+        {onConfirmAppOnly ? (
+          <Button variant="outline" onClick={onConfirmAppOnly}>
+            Only this app
+          </Button>
+        ) : null}
         <Button onClick={onConfirm}>Update</Button>
       </AlertDialogFooter>
     </>
