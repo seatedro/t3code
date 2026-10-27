@@ -110,7 +110,7 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       const nested = NodePath.join(tmp, "packages", "nested");
       yield* fileSystem.makeDirectory(nested, { recursive: true });
       const checkpointStore = yield* CheckpointStore.CheckpointStore;
-      expect(yield* checkpointStore.isGitRepository(nested)).toBe(true);
+      expect(yield* checkpointStore.supportsCheckpoints(nested)).toBe(true);
     }),
   );
   describe("diffCheckpoints", () => {
