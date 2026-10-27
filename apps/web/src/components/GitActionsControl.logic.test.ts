@@ -217,3 +217,31 @@ describe("resolveAutoFeatureBranchName", () => {
     assert.equal(ref, "feature/ticket-1-2");
   });
 });
+
+describe("when: the repository has a vcs problem", () => {
+  it("disables commit, push, pull, and create PR for an unsupported or broken repository", () => {
+    for (const code of ["unsupported", "error"] as const) {
+      const blocked = status({
+        hasWorkingTreeChanges: true,
+        aheadCount: 2,
+        behindCount: 1,
+        vcs: { kind: "jj", problem: { code, message: "jj is unavailable." } },
+      });
+      assert.deepEqual(
+        buildMenuItems(blocked, false).map((item) => item.disabled),
+        [true, true, true],
+      );
+      const quick = resolveQuickAction(status({ ...blocked, hasWorkingTreeChanges: false }), false);
+      assert.deepInclude(quick, { disabled: true, hint: "jj is unavailable." });
+    }
+  });
+
+  it("keeps actions available for a stale workspace", () => {
+    const stale = status({
+      hasWorkingTreeChanges: true,
+      vcs: { kind: "jj", problem: { code: "stale", message: "Workspace is stale." } },
+    });
+    assert.isFalse(buildMenuItems(stale, false)[0]?.disabled);
+    assert.isFalse(resolveQuickAction(stale, false).disabled);
+  });
+});

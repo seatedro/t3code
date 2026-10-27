@@ -15,6 +15,7 @@ import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
+import { useSelectedThreadVcsTerminology } from "../../../state/use-selected-thread-vcs-terminology";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { SheetActionButton } from "./gitSheetComponents";
 
@@ -35,6 +36,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
+  const vcsTerminology = useSelectedThreadVcsTerminology();
   const { selectedThreadProject } = useThreadSelection();
   const terminology = sourceControlClients.get(
     selectedThreadProject?.repositoryIdentity?.provider,
@@ -188,7 +190,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
             />
             <SheetActionButton
               icon="arrow.branch"
-              label="Feature branch & continue"
+              label={`Feature ${vcsTerminology.ref.toLowerCase()} & continue`}
               disabled={!canChangeThreadBranch}
               tone="primary"
               onPress={() => void movePendingActionToFeatureBranch()}

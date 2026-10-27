@@ -15,6 +15,7 @@ import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { WorktreeSetupSheet } from "./worktree-setup-sheet";
 import { ShimmeringWorkContent } from "./thread-work-log";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
+import { useSelectedThreadVcsTerminology } from "../../state/use-selected-thread-vcs-terminology";
 
 export interface WorktreeSetupCardProps {
   snapshot: WorktreeSetupSnapshot;
@@ -47,6 +48,7 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
   const scriptName = snapshot.setupScript?.name ?? "Setup script";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const now = useVisibleSecondClock(running || working);
+  const workspaceNoun = useSelectedThreadVcsTerminology().workspace;
   const failed =
     snapshot.phase === "failed" || snapshot.stages.some((stage) => stage.status === "failed");
   const label =
@@ -55,17 +57,17 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
       : running
         ? handedOff
           ? "Setup continues…"
-          : "Setting up worktree…"
+          : `Setting up ${workspaceNoun.toLowerCase()}…`
         : snapshot.phase === "cancelled"
-          ? "Worktree setup cancelled"
+          ? `${workspaceNoun} setup cancelled`
           : snapshot.phase === "failed"
-            ? "Worktree setup failed"
+            ? `${workspaceNoun} setup failed`
             : failed
               ? "Setup script failed"
-              : "Worktree ready";
+              : `${workspaceNoun} ready`;
 
   return (
-    <View accessibilityLabel="Worktree setup" className="py-1">
+    <View accessibilityLabel={`${workspaceNoun} setup`} className="py-1">
       <View className="min-h-11 flex-row items-center gap-2 border-b border-border px-1">
         <HeaderLabel
           label={label}
@@ -85,7 +87,7 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
           accessibilityLabel={
             backgroundSetup
               ? `Background setup is still running: ${scriptName}. Show setup progress.`
-              : "Worktree setup details"
+              : `${workspaceNoun} setup details`
           }
           accessibilityState={{ expanded: detailsOpen }}
           onPress={() => setDetailsOpen(true)}
@@ -141,7 +143,12 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
         </View>
       ) : null}
       {detailsOpen ? (
-        <SetupDetailsSheet {...props} now={now} onClose={() => setDetailsOpen(false)} />
+        <SetupDetailsSheet
+          {...props}
+          workspaceNoun={workspaceNoun}
+          now={now}
+          onClose={() => setDetailsOpen(false)}
+        />
       ) : null}
     </View>
   );
@@ -196,12 +203,13 @@ function SetupDetailsSheet({
   onWorkLocally,
   onClose,
   now,
-}: WorktreeSetupCardProps & { onClose: () => void; now: number }) {
+  workspaceNoun,
+}: WorktreeSetupCardProps & { onClose: () => void; now: number; workspaceNoun: string }) {
   const insets = useSafeAreaInsets();
   const [bodyHeight, setBodyHeight] = useState(0);
   const canCancel = snapshot.phase === "running" && !turnStarted;
   return (
-    <WorktreeSetupSheet height={bodyHeight} onClose={onClose}>
+    <WorktreeSetupSheet title={`${workspaceNoun} setup`} height={bodyHeight} onClose={onClose}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         bounces={false}
@@ -233,7 +241,7 @@ function SetupDetailsSheet({
             <Button
               label="Cancel setup"
               tone="danger"
-              accessibilityLabel="Cancel worktree setup"
+              accessibilityLabel={`Cancel ${workspaceNoun.toLowerCase()} setup`}
               onPress={() => {
                 onClose();
                 onCancel();

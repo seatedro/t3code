@@ -1,4 +1,5 @@
 import { type VcsRef } from "@t3tools/contracts";
+import { vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -10,6 +11,10 @@ import {
   resolveLocalCheckoutBranchMismatch,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  resolveCurrentWorkspaceLabel,
+  resolveEnvModeLabel,
+  resolveLockedWorkspaceLabel,
+  resolvePreviousWorktreeLabel,
 } from "./BranchToolbar.logic";
 
 describe("resolveDraftEnvModeAfterBranchChange", () => {
@@ -252,5 +257,18 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("workspace labels", () => {
+  it("name jj workspaces where git names worktrees", () => {
+    const jj = vcsTerminologyFor("jj");
+    expect(resolveEnvModeLabel("worktree", jj)).toBe("New workspace");
+    expect(resolveCurrentWorkspaceLabel("/repo-ws", jj)).toBe("Current workspace");
+    expect(resolveLockedWorkspaceLabel("/repo-ws", "worktree", jj)).toBe("Workspace");
+    expect(resolvePreviousWorktreeLabel({ branch: "t3/abc", worktreePath: "/w" }, jj)).toBe(
+      "Previous workspace (t3/abc)",
+    );
+    expect(resolveEnvModeLabel("worktree")).toBe("New worktree");
   });
 });

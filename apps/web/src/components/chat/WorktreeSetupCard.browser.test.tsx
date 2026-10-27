@@ -2,6 +2,7 @@ import { ThreadId, type WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 import { act, fakeTimers, render } from "../../../test/render";
+import { vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 
 const NOW = new Date("2026-10-26T12:00:10.000Z");
@@ -43,7 +44,13 @@ function snapshot(overrides: Partial<WorktreeSetupSnapshot>): WorktreeSetupSnaps
 }
 
 const card = (value: WorktreeSetupSnapshot) => (
-  <WorktreeSetupCard snapshot={value} onCancel={null} onWorkLocally={null} onOpenTerminal={null} />
+  <WorktreeSetupCard
+    snapshot={value}
+    terminology={vcsTerminologyFor("git")}
+    onCancel={null}
+    onWorkLocally={null}
+    onOpenTerminal={null}
+  />
 );
 
 it("ticks the running stage while finished stages keep their duration", async () => {

@@ -113,6 +113,8 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useVcsTerminology } from "../../hooks/useVcsTerminology";
+import type { VcsTerminology } from "@t3tools/client-runtime/state/vcs";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -124,11 +126,16 @@ const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
 
-const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
-  worktree: "Create a new worktree",
-  root: "Use the project checkout",
-  existing_worktree: "Use a specific checkout",
-};
+function workspaceModeLabel(mode: WorkspaceMode, terminology: VcsTerminology): string {
+  switch (mode) {
+    case "worktree":
+      return `Create a new ${terminology.workspace.toLowerCase()}`;
+    case "root":
+      return "Use the project checkout";
+    case "existing_worktree":
+      return "Use a specific checkout";
+  }
+}
 
 const EMPTY_DRAFT: DraftState = {
   editingId: null,
@@ -1152,6 +1159,10 @@ function ScheduledTaskEditorForm({
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const terminology = useVcsTerminology(
+    connected ? environmentId : null,
+    selectedProject?.workspaceRoot,
+  );
   const instanceEntries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(providers),
@@ -1421,10 +1432,12 @@ function ScheduledTaskEditorForm({
                 }
               >
                 <SelectTrigger size="sm" id="scheduled-task-workspace">
-                  <SelectValue>{WORKSPACE_MODE_LABELS[draft.workspaceMode]}</SelectValue>
+                  <SelectValue>{workspaceModeLabel(draft.workspaceMode, terminology)}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  <SelectItem value="worktree">Create a new worktree</SelectItem>
+                  <SelectItem value="worktree">
+                    {workspaceModeLabel("worktree", terminology)}
+                  </SelectItem>
                   <SelectItem value="root">Use the project checkout</SelectItem>
                   <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
                 </SelectPopup>
@@ -1433,7 +1446,10 @@ function ScheduledTaskEditorForm({
           </div>
 
           {draft.workspaceMode === "worktree" ? (
-            <Field label="Base branch" htmlFor="scheduled-task-base-ref">
+            <Field
+              label={`Base ${terminology.ref.toLowerCase()}`}
+              htmlFor="scheduled-task-base-ref"
+            >
               <WorktreeBaseBranchPicker
                 key={`${environmentId}:${selectedProjectId}`}
                 id="scheduled-task-base-ref"

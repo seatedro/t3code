@@ -4,6 +4,7 @@ import type {
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { type ChangeRequestTerminology, sourceControlClients } from "../sourceControlClients.ts";
+import { vcsProblemBlockingReason } from "./vcsPresentation.ts";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -61,10 +62,12 @@ export function buildMenuItems(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
+  const isBlocked = vcsProblemBlockingReason(gitStatus) !== null;
   const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
-  const canCommit = !isBusy && hasChanges;
+  const canCommit = !isBusy && !isBlocked && hasChanges;
   const canPush =
     !isBusy &&
+    !isBlocked &&
     hasBranch &&
     !hasChanges &&
     !isBehind &&
@@ -72,6 +75,7 @@ export function buildMenuItems(
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
     !isBusy &&
+    !isBlocked &&
     hasBranch &&
     !hasOpenPr &&
     (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0 &&
@@ -132,6 +136,11 @@ export function resolveQuickAction(
       kind: "show_hint",
       hint: "Git status is unavailable.",
     };
+  }
+
+  const blockedReason = vcsProblemBlockingReason(gitStatus);
+  if (blockedReason !== null) {
+    return { label: "Commit", disabled: true, kind: "show_hint", hint: blockedReason };
   }
 
   const hasBranch = gitStatus.refName !== null;
@@ -261,6 +270,8 @@ export function getGitActionDisabledReason(input: {
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
   if (!gitStatus) return "Git status is unavailable.";
+  const blockedReason = vcsProblemBlockingReason(gitStatus);
+  if (blockedReason !== null) return blockedReason;
 
   const hasBranch = gitStatus.refName !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
