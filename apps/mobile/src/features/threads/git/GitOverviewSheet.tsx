@@ -47,6 +47,7 @@ import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-wo
 import { vcsEnvironment } from "../../../state/vcs";
 import { resolveGitOverviewReviewNavigationAction } from "./git-overview-navigation";
 import { menuItemIconName, statusSummary } from "./gitSheetComponents";
+import { RepairWorkspaceButton } from "./RepairWorkspaceButton";
 import { VcsProblemRow } from "./VcsProblemRow";
 import {
   LinkedPullRequestRow,
@@ -263,7 +264,15 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
     >
       {vcsProblem ? (
         <ListSection>
-          <VcsProblemRow problem={vcsProblem} terminology={vcsTerminology} />
+          <VcsProblemRow
+            problem={vcsProblem}
+            terminology={vcsTerminology}
+            action={
+              vcsProblem.code === "stale" && selectedThreadCwd ? (
+                <RepairWorkspaceButton environmentId={environmentId} cwd={selectedThreadCwd} />
+              ) : undefined
+            }
+          />
         </ListSection>
       ) : null}
       <ListSection>

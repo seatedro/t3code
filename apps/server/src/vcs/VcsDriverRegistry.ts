@@ -15,6 +15,7 @@ import type {
 } from "@t3tools/contracts";
 import { VcsUnsupportedOperationError } from "@t3tools/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import * as JjCheckpoints from "./jj/JjCheckpoints.ts";
 import * as JjCli from "./jj/JjCli.ts";
 import * as JjVcsDriver from "./jj/JjVcsDriver.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
@@ -83,8 +84,16 @@ export const make = Effect.gen(function* () {
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
   const jjCli = yield* JjCli.make;
+  const jjShape = yield* JjVcsDriver.makeVcsDriverShape(git).pipe(
+    Effect.provideService(JjCli.JjCli, jjCli),
+  );
+  const jjCheckpoints = git.checkpoints
+    ? yield* JjCheckpoints.make({ execute: git.execute, checkpoints: git.checkpoints }).pipe(
+        Effect.provideService(JjCli.JjCli, jjCli),
+      )
+    : undefined;
   const jj = VcsDriver.VcsDriver.of(
-    yield* JjVcsDriver.makeVcsDriverShape(git).pipe(Effect.provideService(JjCli.JjCli, jjCli)),
+    jjCheckpoints ? { ...jjShape, checkpoints: jjCheckpoints } : jjShape,
   );
   const drivers: Partial<Record<VcsDriverKind, VcsDriver.VcsDriver["Service"]>> = {
     git,

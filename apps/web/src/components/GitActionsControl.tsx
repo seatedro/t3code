@@ -126,6 +126,7 @@ import {
   vcsProblemDescription,
   vcsTerminologyFor,
 } from "@t3tools/client-runtime/state/vcs";
+import { RepairWorkspaceButton } from "./RepairWorkspaceButton";
 import { VcsProblemIndicator } from "./VcsProblemIndicator";
 import { useOpenLink } from "~/browser/useOpenLink";
 
@@ -1636,7 +1637,15 @@ export default function GitActionsControl({
     <>
       {presentation !== "menu" && isRepo && vcsProblem ? (
         <div className={cn("flex min-w-0 items-center", isPanel && "h-8 px-2.5")}>
-          <VcsProblemIndicator problem={vcsProblem} terminology={vcsTerminology} />
+          <VcsProblemIndicator
+            problem={vcsProblem}
+            terminology={vcsTerminology}
+            action={
+              vcsProblem.code === "stale" && activeEnvironmentId !== null ? (
+                <RepairWorkspaceButton environmentId={activeEnvironmentId} cwd={gitCwd} />
+              ) : undefined
+            }
+          />
         </div>
       ) : null}
       {presentation === "menu" ? (

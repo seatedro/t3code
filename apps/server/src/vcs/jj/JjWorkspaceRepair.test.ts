@@ -1,24 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { VcsProcessExitError, VcsWorkspaceStaleError } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import * as ProcessRunner from "../../processRunner.ts";
 import * as GitVcsDriver from "../GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../VcsDriverRegistry.ts";
+import { jjAvailable } from "../testing/JjFixture.ts";
 import * as VcsProcess from "../VcsProcess.ts";
-import { JjCli } from "./JjCli.ts";
+import { layer as JjCliLayer } from "./JjCli.ts";
 import * as JjWorkspaceRepair from "./JjWorkspaceRepair.ts";
-
-// CI runners do not install jj; these tests drive the real binary.
-const jjAvailable = NodeChildProcess.spawnSync("jj", ["--version"]).status === 0;
 
 const JJ_FLAGS = [
   "--color=never",
@@ -32,52 +29,22 @@ const JJ_FLAGS = [
   "--config",
   "git.abandon-unreachable-commits=false",
 ];
-const STALE = /The working copy is stale|Could not read working copy's operation/;
-
 const layerVcsProcess = VcsProcess.layer.pipe(Layer.provide(NodeServices.layer));
 const layerTest = Layer.mergeAll(layerVcsProcess, NodeServices.layer);
 
-// Stand-in for the foundation lane's JjCli, with the same flags and stale classification.
-const layerJjCliTest = (env: NodeJS.ProcessEnv) =>
-  Layer.effect(
-    JjCli,
-    Effect.gen(function* () {
-      const vcsProcess = yield* VcsProcess.VcsProcess;
-      return JjCli.of({
-        run: (input) =>
-          vcsProcess
-            .run({
-              operation: input.operation,
-              command: "jj",
-              cwd: input.cwd,
-              args: [
-                ...JJ_FLAGS,
-                ...(input.workingCopy === "observe" ? ["--ignore-working-copy"] : []),
-                ...input.args,
-              ],
-              env,
-              allowNonZeroExit: true,
-            })
-            .pipe(
-              Effect.flatMap((output) => {
-                if (output.exitCode === 0 || input.allowNonZeroExit) return Effect.succeed(output);
-                const context = { operation: input.operation, cwd: input.cwd };
-                const detail = output.stderr.trim();
-                return Effect.fail(
-                  STALE.test(output.stderr)
-                    ? new VcsWorkspaceStaleError({ ...context, detail })
-                    : new VcsProcessExitError({
-                        ...context,
-                        command: "jj",
-                        exitCode: output.exitCode,
-                        detail,
-                      }),
-                );
-              }),
-            ),
-        version: Effect.die("unused"),
-      });
-    }),
+// The real JjCli, with every process it spawns pointed at the fixture's isolated config.
+const layerJjCli = (env: NodeJS.ProcessEnv) =>
+  JjCliLayer.pipe(
+    Layer.provide(
+      Layer.effect(
+        VcsProcess.VcsProcess,
+        Effect.map(VcsProcess.make, (vcsProcess) =>
+          VcsProcess.VcsProcess.of({
+            run: (input) => vcsProcess.run({ ...input, env: { ...env, ...input.env } }),
+          }),
+        ),
+      ).pipe(Layer.provide(ProcessRunner.layer)),
+    ),
   );
 
 const layerRegistryTest = Layer.unwrap(
@@ -146,7 +113,7 @@ const makeFixture = Effect.gen(function* () {
       Effect.flatMap((service) => service.repair({ cwd })),
       Effect.provide(
         JjWorkspaceRepair.layer.pipe(
-          Layer.provide(Layer.mergeAll(layerJjCliTest(env), layerRegistryTest)),
+          Layer.provide(Layer.mergeAll(layerJjCli(env), layerRegistryTest)),
         ),
       ),
     );

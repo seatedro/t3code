@@ -1,10 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { CheckpointRef, VcsProcessExitError, VcsWorkspaceStaleError } from "@t3tools/contracts";
+import { CheckpointRef } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -12,25 +11,10 @@ import { describe } from "vite-plus/test";
 
 import * as ProcessRunner from "../../processRunner.ts";
 import * as GitVcsDriver from "../GitVcsDriver.ts";
+import { jjAvailable } from "../testing/JjFixture.ts";
 import * as VcsProcess from "../VcsProcess.ts";
-import { JjCli } from "./JjCli.ts";
+import { JjCli, layer as JjCliLayer } from "./JjCli.ts";
 import * as JjCheckpoints from "./JjCheckpoints.ts";
-
-// CI images do not ship jj yet; these suites need the real binary.
-const jjAvailable = NodeChildProcess.spawnSync("jj", ["--version"]).status === 0;
-
-const JJ_GLOBAL_ARGS = [
-  "--color=never",
-  "--no-pager",
-  "--config",
-  "ui.paginate=never",
-  "--config",
-  "ui.log-word-wrap=false",
-  "--config",
-  "snapshot.auto-update-stale=false",
-  "--config",
-  "git.abandon-unreachable-commits=false",
-];
 
 // Isolates every jj and git process from the developer's config.
 const layerFixtureVcsProcess = Layer.effect(
@@ -53,52 +37,7 @@ const layerFixtureVcsProcess = Layer.effect(
   }),
 ).pipe(Layer.provide(ProcessRunner.layer));
 
-const STALE_PATTERN = /The working copy is stale|Could not read working copy's operation/;
-
-// Stands in for the real JjCli runner with the same flags and stale classification.
-const layerJjCliTest = Layer.effect(
-  JjCli,
-  Effect.gen(function* () {
-    const vcsProcess = yield* VcsProcess.VcsProcess;
-    return JjCli.of({
-      run: (input) =>
-        vcsProcess
-          .run({
-            operation: input.operation,
-            command: "jj",
-            cwd: input.cwd,
-            args: [
-              ...JJ_GLOBAL_ARGS,
-              ...(input.workingCopy === "observe" ? ["--ignore-working-copy"] : []),
-              ...input.args,
-            ],
-            env: { JJ_EDITOR: "false", JJ_PAGER: "cat", JJ_OP_USERNAME: "t3code" },
-            allowNonZeroExit: true,
-          })
-          .pipe(
-            Effect.flatMap((result) => {
-              if (result.exitCode === 0 || input.allowNonZeroExit === true) {
-                return Effect.succeed(result);
-              }
-              const context = { operation: input.operation, cwd: input.cwd };
-              return Effect.fail(
-                STALE_PATTERN.test(result.stderr)
-                  ? new VcsWorkspaceStaleError({ ...context, detail: result.stderr.trim() })
-                  : new VcsProcessExitError({
-                      ...context,
-                      command: `jj ${input.args[0] ?? ""}`,
-                      exitCode: result.exitCode,
-                      detail: result.stderr.trim(),
-                    }),
-              );
-            }),
-          ),
-      version: Effect.succeed({ major: 0, minor: 46, patch: 0, raw: "0.46.0" }),
-    });
-  }),
-);
-
-const layerTest = layerJjCliTest.pipe(
+const layerTest = JjCliLayer.pipe(
   Layer.provideMerge(layerFixtureVcsProcess),
   Layer.provideMerge(NodeServices.layer),
 );
