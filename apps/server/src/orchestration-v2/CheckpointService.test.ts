@@ -9,6 +9,7 @@ import {
   type OrchestrationV2CheckpointScope,
   VcsProcessTimeoutError,
   VcsUnsupportedOperationError,
+  VcsWorkspaceStaleError,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -42,6 +43,11 @@ it.effect(
           cwd: scope.cwd,
           timeoutMs: 30000,
         }),
+        new VcsWorkspaceStaleError({
+          operation: "test.capture",
+          cwd: scope.cwd,
+          detail: "The working copy is stale",
+        }),
         new VcsUnsupportedOperationError({
           operation: "test.capture",
           kind: "git",
@@ -53,7 +59,7 @@ it.effect(
             Layer.mergeAll(
               IdAllocator.layer,
               Layer.mock(CheckpointStore.CheckpointStore)({
-                isGitRepository: () => Effect.succeed(true),
+                supportsCheckpoints: () => Effect.succeed(true),
                 hasCheckpointRef: () => Effect.succeed(false),
                 captureCheckpoint: () => Effect.fail(captureError),
               }),
@@ -93,4 +99,61 @@ it.effect(
         }).pipe(Effect.provide(layerTest));
       }
     }),
+);
+
+it.effect("records an error checkpoint when checkpoint support cannot be determined", () =>
+  Effect.gen(function* () {
+    const scope: OrchestrationV2CheckpointScope = {
+      id: CheckpointScopeId.make("checkpoint-scope:support-failure"),
+      threadId: ThreadId.make("thread:support-failure"),
+      runId: RunId.make("run:support-failure:1"),
+      nodeId: NodeId.make("node:support-failure:1"),
+      parentScopeId: null,
+      providerThreadId: ProviderThreadId.make("provider-thread:support-failure"),
+      kind: "root_run",
+      ordinalWithinParent: 0,
+      advancesAppRunCount: true,
+      cwd: "/repo/stale",
+      createdAt: DateTime.makeUnsafe("2026-07-28T00:00:00.000Z"),
+    };
+    const supportError = new VcsWorkspaceStaleError({
+      operation: "test.detect",
+      cwd: scope.cwd,
+      detail: "The working copy is stale",
+    });
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            supportsCheckpoints: () => Effect.fail(supportError),
+          }),
+        ),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+    );
+    yield* Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      const baseline = yield* Effect.result(
+        checkpoints.captureBaseline({ scope, ordinalWithinScope: 0 }),
+      );
+      const materialized = yield* checkpoints.materializeBaselineCheckpoint({
+        scope,
+        ordinalWithinScope: 0,
+      });
+      const checkpoint = yield* checkpoints.capture({
+        scope,
+        ordinalWithinScope: 1,
+        runId: scope.runId!,
+        nodeId: scope.nodeId!,
+        appRunOrdinal: 1,
+        capturedAt: scope.createdAt,
+      });
+
+      assert.deepEqual(
+        { baseline: baseline._tag, materialized: materialized.status, turn: checkpoint.status },
+        { baseline: "Failure", materialized: "error", turn: "error" },
+      );
+    }).pipe(Effect.provide(layerTest));
+  }),
 );

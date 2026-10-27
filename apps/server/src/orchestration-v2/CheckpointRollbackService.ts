@@ -6,6 +6,8 @@ import {
   ProviderThreadId,
   ThreadId,
   VcsProcessExitError,
+  VcsUnsupportedOperationError,
+  VcsWorkspaceStaleError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -74,17 +76,26 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
 const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
 const isVcsProcessExitError = Schema.is(VcsProcessExitError);
 const isCheckpointRestoreError = Schema.is(CheckpointRestoreError);
+const isVcsWorkspaceStaleError = Schema.is(VcsWorkspaceStaleError);
+const isVcsUnsupportedOperationError = Schema.is(VcsUnsupportedOperationError);
+
+export const STALE_WORKSPACE_RESTORE_MESSAGE =
+  "This jj workspace is stale because its working-copy change was rewritten elsewhere. Repair the workspace, then try again.";
 
 /**
- * The message clients see when a rollback fails. Only a held Git index lock
- * gets its own explanation; other reasons carry internal ids or raw Git
- * output, so they fall back to the generic message.
+ * The message clients see when a rollback fails. A held Git index lock, a
+ * stale jj workspace, and an unsupported restore get their own explanation;
+ * other reasons carry internal ids or raw VCS output, so they fall back to the
+ * generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
-  return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
-    ? GIT_INDEX_LOCKED_DETAIL
-    : ROLLBACK_FAILED_MESSAGE;
+  if (isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL) {
+    return GIT_INDEX_LOCKED_DETAIL;
+  }
+  if (isVcsWorkspaceStaleError(restoreCause)) return STALE_WORKSPACE_RESTORE_MESSAGE;
+  if (isVcsUnsupportedOperationError(restoreCause)) return restoreCause.detail;
+  return ROLLBACK_FAILED_MESSAGE;
 }
 
 export interface CheckpointRollbackServiceV2Shape {

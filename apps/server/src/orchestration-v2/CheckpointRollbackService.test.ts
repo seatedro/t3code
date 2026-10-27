@@ -17,6 +17,8 @@ import {
   ProviderSessionId,
   ProviderThreadId,
   ThreadId,
+  VcsUnsupportedOperationError,
+  VcsWorkspaceStaleError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -731,3 +733,32 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
     );
   },
 );
+
+it("explains jj restore failures that the user can act on", () => {
+  const rollbackError = (cause: unknown) =>
+    new CheckpointRollbackService.CheckpointRollbackExecutionError({
+      reason: "unexpected-failure",
+      threadId: ThreadId.make("thread:rollback-message"),
+      providerThreadId: ProviderThreadId.make("provider-thread:rollback-message"),
+      checkpointId: CheckpointId.make("checkpoint:rollback-message"),
+      cause: new CheckpointService.CheckpointRestoreError({
+        scopeId: CheckpointScopeId.make("checkpoint-scope:rollback-message"),
+        checkpointId: CheckpointId.make("checkpoint:rollback-message"),
+        cause,
+      }),
+    });
+  const refusal = "Restoring this checkpoint would make workspaces that build on it stale: ws2.";
+
+  assert.deepEqual(
+    [
+      new VcsWorkspaceStaleError({ operation: "restore", cwd: "/ws", detail: "stale" }),
+      new VcsUnsupportedOperationError({ operation: "restore", kind: "jj", detail: refusal }),
+      new Error("raw output"),
+    ].map((cause) => CheckpointRollbackService.rollbackFailureClientMessage(rollbackError(cause))),
+    [
+      CheckpointRollbackService.STALE_WORKSPACE_RESTORE_MESSAGE,
+      refusal,
+      CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+    ],
+  );
+});
