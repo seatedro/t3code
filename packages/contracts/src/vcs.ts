@@ -268,6 +268,19 @@ export class VcsUnsupportedOperationError extends Schema.TaggedError<VcsUnsuppor
   }
 }
 
+export class VcsWorkspaceStaleError extends Schema.TaggedError<VcsWorkspaceStaleError>()(
+  "VcsWorkspaceStaleError",
+  {
+    operation: Schema.String,
+    cwd: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Workspace is stale in ${this.operation}: ${this.cwd} - ${this.detail}`;
+  }
+}
+
 export const VcsError = Schema.Union([
   VcsProcessSpawnError,
   VcsProcessExitError,
@@ -278,5 +291,19 @@ export const VcsError = Schema.Union([
   VcsProcessMissingExitCodeError,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  VcsWorkspaceStaleError,
 ]);
 export type VcsError = typeof VcsError.Type;
+
+export const VcsWorkspaceProblem = Schema.Struct({
+  code: Schema.Literals(["stale", "unsupported", "error"]),
+  message: Schema.String,
+});
+export type VcsWorkspaceProblem = typeof VcsWorkspaceProblem.Type;
+
+export const VcsStatusVcs = Schema.Struct({
+  kind: VcsDriverKind,
+  workspaceName: Schema.optional(TrimmedNonEmptyString),
+  problem: Schema.optional(VcsWorkspaceProblem),
+});
+export type VcsStatusVcs = typeof VcsStatusVcs.Type;
