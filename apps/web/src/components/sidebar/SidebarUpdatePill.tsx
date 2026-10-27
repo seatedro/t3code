@@ -392,6 +392,18 @@ function SidebarUpdateControl() {
     setIsActionPending(false);
   };
 
+  // Fork: update just the desktop app when servers or providers also have updates.
+  const updateAppOnly = async () => {
+    const bridge = window.desktopBridge;
+    setIsConfirmingEverything(false);
+    if (!bridge) return;
+    setIsActionPending(true);
+    const downloaded =
+      action !== "download" || (await downloadLocalUpdate(bridge, { notifyDownloaded: false }));
+    if (downloaded) await installLocalUpdate(bridge);
+    setIsActionPending(false);
+  };
+
   const handleCheckAnimationIteration = () => {
     setIsCheckAnimationLatched(
       shouldContinueDesktopUpdateCheckAnimation({
@@ -422,6 +434,7 @@ function SidebarUpdateControl() {
       restarts={everything.restarts}
       checking={providerCheck === "dialog"}
       onConfirm={() => void runEverything()}
+      {...(action !== "none" ? { onConfirmAppOnly: () => void updateAppOnly() } : {})}
     />
   );
 
