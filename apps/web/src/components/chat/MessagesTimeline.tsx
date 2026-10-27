@@ -78,6 +78,7 @@ import { TooltipScrollDismissArea } from "../ui/tooltip";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useVcsTerminology } from "~/hooks/useVcsTerminology";
 import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
@@ -1485,9 +1486,11 @@ function WorktreeSetupTimelineRow({
   const terminalId = row.snapshot.setupScript?.terminalId ?? null;
   const openTerminal = ctx.onOpenWorktreeSetupTerminal;
   const onOpenTerminal = openTerminal && terminalId ? () => openTerminal(terminalId) : null;
+  const terminology = useVcsTerminology(ctx.activeThreadEnvironmentId, ctx.workspaceRoot);
   return (
     <WorktreeSetupCard
       snapshot={row.snapshot}
+      terminology={terminology}
       embedded={row.embedded}
       onCancel={row.embedded ? null : ctx.onCancelWorktreeSetup}
       onWorkLocally={

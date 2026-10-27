@@ -6,6 +6,7 @@ import type {
   WorktreeSubmodules,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { type VcsTerminology, vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
@@ -92,8 +93,11 @@ export function resolveContextStripLabelsCompact(input: {
     : input.neededWidth > input.availableWidth;
 }
 
-export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Current checkout";
+export function resolveEnvModeLabel(
+  mode: EnvMode,
+  terminology: VcsTerminology = vcsTerminologyFor(null),
+): string {
+  return mode === "worktree" ? `New ${terminology.workspace.toLowerCase()}` : "Current checkout";
 }
 
 export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
@@ -102,16 +106,24 @@ export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
   none: "Skip",
 };
 
-export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {
-  return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
+export function resolveCurrentWorkspaceLabel(
+  activeWorktreePath: string | null,
+  terminology: VcsTerminology,
+): string {
+  return activeWorktreePath
+    ? `Current ${terminology.workspace.toLowerCase()}`
+    : resolveEnvModeLabel("local");
 }
 
 export function resolveLockedWorkspaceLabel(
   activeWorktreePath: string | null,
   effectiveEnvMode: EnvMode,
+  terminology: VcsTerminology,
 ): string {
-  if (activeWorktreePath) return "Worktree";
-  return effectiveEnvMode === "worktree" ? resolveEnvModeLabel("worktree") : "Local checkout";
+  if (activeWorktreePath) return terminology.workspace;
+  return effectiveEnvMode === "worktree"
+    ? resolveEnvModeLabel("worktree", terminology)
+    : "Local checkout";
 }
 
 export interface PreviousWorktreeSeed {
@@ -152,8 +164,12 @@ export function resolvePreviousWorktreeSeed(input: {
   return latest === null ? null : { branch: latest.branch, worktreePath: latest.worktreePath };
 }
 
-export function resolvePreviousWorktreeLabel(seed: PreviousWorktreeSeed): string {
-  return seed.branch ? `Previous worktree (${seed.branch})` : "Previous worktree";
+export function resolvePreviousWorktreeLabel(
+  seed: PreviousWorktreeSeed,
+  terminology: VcsTerminology,
+): string {
+  const label = `Previous ${terminology.workspace.toLowerCase()}`;
+  return seed.branch ? `${label} (${seed.branch})` : label;
 }
 
 export function resolveEffectiveEnvMode(input: {

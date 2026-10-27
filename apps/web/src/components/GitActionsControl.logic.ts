@@ -11,6 +11,7 @@ import {
   type DefaultBranchConfirmableAction,
   type GitActionIconName,
   type GitDialogAction,
+  vcsProblemBlockingReason,
 } from "@t3tools/client-runtime/state/vcs";
 
 export {
@@ -118,16 +119,19 @@ export function buildMenuItems(
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
   const hasDefaultBranchDelta = (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0;
+  const isBlocked = vcsProblemBlockingReason(gitStatus) !== null;
   const canPushWithoutUpstream = hasPrimaryRemote && !gitStatus.hasUpstream;
-  const canCommit = !isBusy && hasChanges;
+  const canCommit = !isBusy && !isBlocked && hasChanges;
   const canPush =
     !isBusy &&
+    !isBlocked &&
     hasBranch &&
     !isBehind &&
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
     !isBusy &&
+    !isBlocked &&
     hasBranch &&
     !hasOpenPr &&
     hasDefaultBranchDelta &&
@@ -191,6 +195,11 @@ export function resolveQuickAction(
       kind: "show_hint",
       hint: "Git status is unavailable.",
     };
+  }
+
+  const blockedReason = vcsProblemBlockingReason(gitStatus);
+  if (blockedReason !== null) {
+    return { label: "Commit", disabled: true, kind: "show_hint", hint: blockedReason };
   }
 
   const hasBranch = gitStatus.refName !== null;

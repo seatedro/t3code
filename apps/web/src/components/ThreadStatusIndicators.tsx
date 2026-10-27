@@ -7,12 +7,14 @@ import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePull
 import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull-requests";
+import { vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
   type ScopedThreadRef,
   type ThreadLinkedPullRequest,
   type ThreadPullRequestLink,
+  type VcsDriverKind,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
@@ -771,8 +773,10 @@ export function ThreadTerminalStatusButton({
 
 export function ThreadWorktreeIndicator({
   thread,
+  vcsKind = null,
 }: {
   thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  vcsKind?: VcsDriverKind | null | undefined;
 }) {
   const worktreePath = thread.worktreePath?.trim();
   if (!worktreePath) {
@@ -780,9 +784,10 @@ export function ThreadWorktreeIndicator({
   }
 
   const displayPath = formatWorktreePathForDisplay(worktreePath);
+  const noun = vcsTerminologyFor(vcsKind).workspace;
   const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+    ? `${noun}: ${displayPath} (${thread.branch})`
+    : `${noun}: ${displayPath}`;
 
   return (
     <Tooltip>
