@@ -237,6 +237,8 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       THREAD_LINK_PROTOCOL,
       // Scheme only: the renderer's URL transform checks the rest of the link shape.
       ...LOCAL_FILE_LINK_SCHEMES,
+      // Fork: Diffy pull request links; clients narrow these to github.com pull requests.
+      "diffy",
     ],
     src: IMAGE_SRC_PROTOCOLS,
     dataDarkSrc: IMAGE_SRC_PROTOCOLS,
