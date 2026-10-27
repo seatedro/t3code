@@ -1,4 +1,6 @@
-export const BRAND_ASSET_PATHS = {
+import { withForkIcons } from "./fork-brand.ts";
+
+export const BRAND_ASSET_PATHS = withForkIcons({
   developmentIconComposerProject: "assets/dev/app-icon.icon",
   developmentIosIconPng: "assets/dev/blueprint-ios-1024.png",
   developmentUniversalIconPng: "assets/dev/blueprint-universal-1024.png",
@@ -29,7 +31,7 @@ export const BRAND_ASSET_PATHS = {
   developmentWebFavicon16Png: "assets/dev/blueprint-web-favicon-16x16.png",
   developmentWebFavicon32Png: "assets/dev/blueprint-web-favicon-32x32.png",
   developmentWebAppleTouchIconPng: "assets/dev/blueprint-web-apple-touch-180.png",
-} as const;
+} as const);
 
 export type WebAssetBrand = "development" | "nightly" | "production";
 
