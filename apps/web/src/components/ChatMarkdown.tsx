@@ -90,6 +90,7 @@ import type {
 import ReactMarkdown from "react-markdown";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
+import { isDiffyPullRequestHref } from "../lib/diffyLink";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
@@ -644,6 +645,7 @@ function useChatMarkdownState({
     if (parseComposerContextHref(href)) return href;
     if (parseThreadLinkHref(href)) return href;
     if (isWindowsDrivePathHref(href)) return href;
+    if (isDiffyPullRequestHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   };
   const handleCopy = (event: ReactClipboardEvent<HTMLElement>) => {

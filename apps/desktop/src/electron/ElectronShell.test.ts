@@ -93,6 +93,24 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("opens Diffy pull request links and nothing else on the diffy scheme", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const pullRequest = "diffy://github.com/seatedro/t3code/pull/12";
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const results = yield* Effect.all([
+        electronShell.openExternal(pullRequest),
+        electronShell.openExternal("diffy://github.com/seatedro/t3code/issues/12"),
+        electronShell.openExternal("diffy://example.com/seatedro/t3code/pull/12"),
+        electronShell.openExternal("diffy://user@github.com/seatedro/t3code/pull/12"),
+      ]);
+
+      assert.deepEqual(results, [true, false, false, false]);
+      assert.deepEqual(openExternalMock.mock.calls, [[pullRequest]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("does not open unsafe external URLs", () =>
     Effect.gen(function* () {
       const electronShell = yield* ElectronShell.ElectronShell;
