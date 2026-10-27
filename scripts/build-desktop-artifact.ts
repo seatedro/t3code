@@ -36,6 +36,7 @@ import {
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import { forkBrandText } from "./lib/fork-brand.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -62,7 +63,8 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+// Fork: signed with our own Apple team, which cannot sign com.t3tools.t3code.
+const DESKTOP_APP_ID = "com.seatedro.flock";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2749,9 +2751,11 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
-  return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+  return forkBrandText(
+    resolveDesktopUpdateChannel(version) === "nightly"
+      ? "T3 Code (Nightly)"
+      : (desktopPackageJson.productName ?? "T3 Code"),
+  );
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -3889,7 +3893,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   };
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
-  yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
+  yield* fs.writeFileString(
+    path.join(stageAppDir, "package.json"),
+    `${forkBrandText(stagePackageJsonString)}\n`,
+  );
   const stageWorkspaceConfig = createStageWorkspaceConfig({
     platform: options.platform,
     arch: options.arch,

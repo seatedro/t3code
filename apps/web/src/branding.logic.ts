@@ -4,11 +4,8 @@ export function formatAppDisplayName(input: {
   readonly baseName: string;
   readonly stageLabel: string;
 }): string {
-  if (input.stageLabel.trim().toLowerCase() === "latest") {
-    return input.baseName;
-  }
-
-  return `${input.baseName} (${input.stageLabel})`;
+  // Fork: the app is just "Flock", without a release stage in its name.
+  return input.baseName;
 }
 
 export function resolveServerBackedAppStageLabel(input: {
