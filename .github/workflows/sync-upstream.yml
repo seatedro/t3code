@@ -17,14 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REPO: ${{ github.repository }}
-      SELF: .github/workflows/sync-upstream.yml
+      # fork-release.yml calls release-desktop.yml, so both stay enabled.
+      KEEP: .github/workflows/sync-upstream.yml .github/workflows/fork-release.yml .github/workflows/release-desktop.yml
     steps:
       - name: Disable upstream workflows
         env:
           GH_TOKEN: ${{ github.token }}
         run: &disable |
           gh workflow list --repo "$REPO" --all --json id,path,state \
-            --jq '.[] | select(.path != env.SELF and .state == "active") | .id' |
+            --jq '(env.KEEP | split(" ")) as $keep | .[] | select(.state == "active" and (.path | IN($keep[]) | not)) | .id' |
             xargs -r -n1 gh workflow disable --repo "$REPO"
 
       - name: Fast-forward main from upstream
