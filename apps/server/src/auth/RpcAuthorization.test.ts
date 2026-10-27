@@ -371,3 +371,37 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+it.effect("requires source control permission to repair a workspace", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.vcsRepairWorkspace> =>
+          tag !== WS_METHODS.vcsRepairWorkspace,
+      ),
+    );
+    let handled = 0;
+    const handler = group.toLayerHandler(WS_METHODS.vcsRepairWorkspace, () =>
+      Effect.sync(() => {
+        handled++;
+        return { repaired: false } as const;
+      }),
+    );
+    const denied = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(Layer.merge(handler, RpcAuthorization.layer([AuthOrchestrationReadScope]))),
+    );
+    expect(
+      yield* denied[WS_METHODS.vcsRepairWorkspace]({ cwd: "/repo" }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthSourceControlWriteScope });
+    expect(handled).toBe(0);
+    const allowed = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(Layer.merge(handler, RpcAuthorization.layer([AuthSourceControlWriteScope]))),
+    );
+    expect(yield* allowed[WS_METHODS.vcsRepairWorkspace]({ cwd: "/repo" })).toEqual({
+      repaired: false,
+    });
+    expect(handled).toBe(1);
+  }).pipe(Effect.scoped),
+);
