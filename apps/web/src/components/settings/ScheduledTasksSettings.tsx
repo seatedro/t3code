@@ -156,6 +156,7 @@ const EMPTY_DRAFT: DraftState = {
   modelKey: "",
   runtimeMode: "full-access",
   interactionMode: "default",
+  autoSettle: false,
   baseModelSelection: null,
   signatureEnabled: false,
   ...WEBHOOK_SIGNATURE_DEFAULTS,
@@ -1363,6 +1364,7 @@ function ScheduledTaskEditorForm({
         clampManagedRuntimeMode(environment?.serverConfig?.managedPolicy, draft.runtimeMode) ??
         draft.runtimeMode,
       interactionMode: draft.interactionMode,
+      autoSettle: draft.autoSettle,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1911,6 +1913,24 @@ function ScheduledTaskEditorForm({
                 <span className="text-xs text-muted-foreground">minutes</span>
               </div>
             )}
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="scheduled-task-auto-settle">Settle when done</Label>
+              <p
+                id="scheduled-task-auto-settle-description"
+                className="text-sm text-muted-foreground"
+              >
+                Settle each run's thread once its run completes. Failed runs stay open.
+              </p>
+            </div>
+            <Switch
+              id="scheduled-task-auto-settle"
+              aria-describedby="scheduled-task-auto-settle-description"
+              checked={draft.autoSettle}
+              onCheckedChange={(autoSettle) => setDraft((current) => ({ ...current, autoSettle }))}
+            />
           </div>
 
           <div className="flex items-center justify-between gap-4">
