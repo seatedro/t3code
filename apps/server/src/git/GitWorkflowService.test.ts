@@ -11,6 +11,7 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as JjWorkspaces from "../vcs/jj/JjWorkspaces.ts";
 
 it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
   it.effect("finds a name among the refs of every namespace", () =>
@@ -43,6 +44,9 @@ it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
             }),
           ),
           Layer.provide(Layer.mock(GitManager.GitManager)({})),
+          Layer.provide(
+            Layer.mock(JjWorkspaces.JjWorkspaces)({ repoRoot: () => Effect.succeed(null) }),
+          ),
           Layer.provideMerge(GitVcsDriver.layer),
           Layer.provideMerge(VcsProcess.layer),
           Layer.provideMerge(

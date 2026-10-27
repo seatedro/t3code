@@ -32,6 +32,7 @@ import {
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as JjWorkspaces from "../vcs/jj/JjWorkspaces.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 export class GitWorkflowService extends Context.Service<
@@ -174,6 +175,24 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const jjWorkspaces = yield* JjWorkspaces.JjWorkspaces;
+
+  const asGitCommandError = (operation: string, cwd: string) => (cause: { message: string }) =>
+    new GitCommandError({ operation, command: "jj", cwd, detail: cause.message, cause });
+
+  // jj repos import every T3 ref mutation with abandon-unreachable off, before a user's jj command does.
+  const importJjRefs = (operation: string, cwd: string) =>
+    jjWorkspaces
+      .repoRoot(cwd)
+      .pipe(
+        Effect.flatMap((root) =>
+          root === null
+            ? Effect.void
+            : jjWorkspaces
+                .importGitRefs(cwd)
+                .pipe(Effect.mapError(asGitCommandError(operation, cwd))),
+        ),
+      );
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -377,8 +396,15 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.pullCurrentBranch(cwd)),
       );
     }),
-    runStackedAction: Effect.fn("GitWorkflowService.runStackedAction")(function (input, options) {
-      return ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
+    runStackedAction: Effect.fn("GitWorkflowService.runStackedAction")(function* (input, options) {
+      const operation = "GitWorkflowService.runStackedAction";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot !== null) {
+        yield* jjWorkspaces
+          .ensureBranchAttached({ cwd: input.cwd })
+          .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      }
+      const result = yield* ensureGit(operation, input.cwd).pipe(
         Effect.flatMap((handle) =>
           input.featureBranch
             ? withCheckoutLease(
@@ -388,14 +414,24 @@ export const make = Effect.gen(function* () {
             : gitManager.runStackedAction(input, options),
         ),
       );
+      if (jjRoot !== null) yield* importJjRefs(operation, input.cwd);
+      return result;
     }),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
     ),
     preparePullRequestThread: Effect.fn("GitWorkflowService.preparePullRequestThread")(
-      function (input) {
-        return ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
+      function* (input) {
+        if (input.mode === "worktree" && (yield* jjWorkspaces.repoRoot(input.cwd)) !== null) {
+          return yield* new GitManagerError({
+            operation: "GitWorkflowService.preparePullRequestThread",
+            cwd: input.cwd,
+            detail:
+              "Pull request worktrees are not supported in jj repositories yet. Check the pull request out locally instead.",
+          });
+        }
+        return yield* ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
           Effect.flatMap((handle) =>
             input.mode === "local"
               ? withCheckoutLease(
@@ -414,10 +450,27 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function (input, options) {
-      return ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
-        Effect.andThen(gitManager.createWorktree(input, options)),
-      );
+    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function* (input, options) {
+      const operation = "GitWorkflowService.createWorktree";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot === null) {
+        return yield* ensureGitCommand(operation, input.cwd).pipe(
+          Effect.andThen(gitManager.createWorktree(input, options)),
+        );
+      }
+      const created = yield* jjWorkspaces
+        .create({
+          repoRoot: jjRoot,
+          path: input.path,
+          baseRef: input.refName,
+          branch: input.newRefName ?? input.refName,
+          createBranch: input.newRefName !== undefined,
+        })
+        .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      if (options?.progress?.onWorktreeClaimed) {
+        yield* options.progress.onWorktreeClaimed(created.path);
+      }
+      return { worktree: { path: created.path, refName: created.branch } };
     }),
     listLocalBranchNames: Effect.fn("GitWorkflowService.listLocalBranchNames")(function (cwd) {
       return ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
@@ -460,19 +513,29 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
-    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
-      return ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
-      );
+    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function* (input) {
+      const operation = "GitWorkflowService.removeWorktree";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot === null) {
+        return yield* ensureGitCommand(operation, input.cwd).pipe(
+          Effect.andThen(git.removeWorktree(input)),
+        );
+      }
+      yield* jjWorkspaces
+        .forget({ repoRoot: jjRoot, path: input.path, force: input.force === true })
+        .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
     }),
-    pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function (input) {
-      return ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
+    pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function* (input) {
+      // `git worktree prune` un-colocates missing jj workspaces.
+      if ((yield* jjWorkspaces.repoRoot(input.cwd)) !== null) return;
+      return yield* ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
         Effect.andThen(git.pruneWorktrees(input)),
       );
     }),
     deleteLocalBranch: Effect.fn("GitWorkflowService.deleteLocalBranch")(function (input) {
       return ensureGitCommand("GitWorkflowService.deleteLocalBranch", input.cwd).pipe(
         Effect.andThen(git.deleteLocalBranch(input)),
+        Effect.tap(() => importJjRefs("GitWorkflowService.deleteLocalBranch", input.cwd)),
       );
     }),
     createRef: Effect.fn("GitWorkflowService.createRef")(function (input) {
@@ -482,6 +545,7 @@ export const make = Effect.gen(function* () {
             ? withCheckoutLease(handle.repository.rootPath, git.createRef(input))
             : git.createRef(input),
         ),
+        Effect.tap(() => importJjRefs("GitWorkflowService.createRef", input.cwd)),
       );
     }),
     switchRef: Effect.fn("GitWorkflowService.switchRef")(function (input) {
@@ -489,12 +553,22 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((handle) =>
           withCheckoutLease(handle.repository.rootPath, Effect.scoped(git.switchRef(input))),
         ),
+        Effect.tap(() => importJjRefs("GitWorkflowService.switchRef", input.cwd)),
       );
     }),
-    renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function (input) {
-      return ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
+    renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function* (input) {
+      const operation = "GitWorkflowService.renameBranch";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot !== null) {
+        yield* jjWorkspaces
+          .ensureBranchAttached({ cwd: input.cwd, branch: input.oldBranch })
+          .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      }
+      const result = yield* ensureGit(operation, input.cwd).pipe(
         Effect.andThen(git.renameBranch(input)),
       );
+      if (jjRoot !== null) yield* importJjRefs(operation, input.cwd);
+      return result;
     }),
   });
 });

@@ -1694,6 +1694,19 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  it.live("keeps jj workspaces", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* cleanupFixture();
+        yield* fs.makeDirectory(`${worktree}/.jj`);
+        expect((yield* service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Workspace is managed by jj",
+        });
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
   it.live("preserves tracked edits written after the final status check", () =>
     runCleanupTest(
       Effect.gen(function* () {
