@@ -285,6 +285,10 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    autoSettle: task.autoSettle === true,
+    ...(task.workspaceStrategy.type === "worktree"
+      ? { baseRef: task.workspaceStrategy.baseRef }
+      : {}),
     ...(task.webhook?.url == null || !mayRun || task.blockedByPolicy !== undefined
       ? {}
       : { webhookUrl: task.webhook.url }),
@@ -2050,14 +2054,34 @@ const make = Effect.gen(function* () {
 
   const scheduledTaskWorkspaceStrategy = Effect.fn(
     "OrchestratorMcpService.scheduledTaskWorkspaceStrategy",
-  )(function* (boundToThread: boolean, projectId: ProjectId) {
-    if (boundToThread) return { type: "root" as const };
+  )(function* (
+    boundToThread: boolean,
+    projectId: ProjectId,
+    baseRef: string | undefined,
+  ): Effect.fn.Return<ScheduledTask["workspaceStrategy"], OrchestratorMcpFailure> {
+    if (boundToThread) {
+      if (baseRef !== undefined)
+        return yield* failure(
+          "invalid_request",
+          "`baseRef` applies only to tasks that run in a new thread (bindToCurrentThread=false).",
+        );
+      return { type: "root" };
+    }
     const { workspaceRoot } = yield* requireProject(projectId);
-    return {
+    const strategy = {
       type: "worktree" as const,
-      baseRef: yield* resolveScheduledTaskBaseRef(workspaceRoot),
+      baseRef: baseRef ?? (yield* resolveScheduledTaskBaseRef(workspaceRoot)),
       startFromOrigin: true,
     };
+    if (baseRef !== undefined)
+      yield* threadLaunch
+        .checkWorktreeBase({ projectId, workspaceStrategy: strategy })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("invalid_request", `${error.message} Pass a branch that exists there.`),
+          ),
+        );
+    return strategy;
   });
 
   const scheduledTaskRunModes = Effect.fn("OrchestratorMcpService.scheduledTaskRunModes")(
@@ -2178,10 +2202,15 @@ const make = Effect.gen(function* () {
           : bindToCurrentThread
             ? "continue"
             : "new_thread",
-        workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(bindToCurrentThread, projectId),
+        workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
+          bindToCurrentThread,
+          projectId,
+          input.baseRef,
+        ),
         modelSelection,
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
+        ...(input.autoSettle === undefined ? {} : { autoSettle: input.autoSettle }),
         createdBy: "agent",
         creationSource: "mcp",
         // Scope the idempotency key by provider session so two callers
@@ -2258,11 +2287,15 @@ const make = Effect.gen(function* () {
             : input.bindToCurrentThread && parent !== undefined
               ? parent.thread.id
               : null;
-        // Reset the workspace only when the binding flips, so unbinding cannot leave runs in the shared checkout.
+        // Reset the workspace when the binding flips or a new baseRef arrives, so unbinding cannot leave runs in the shared checkout.
         const workspaceStrategy =
-          (threadId === null) === (existing.threadId === null)
+          (threadId === null) === (existing.threadId === null) && input.baseRef === undefined
             ? existing.workspaceStrategy
-            : yield* scheduledTaskWorkspaceStrategy(threadId !== null, existing.projectId);
+            : yield* scheduledTaskWorkspaceStrategy(
+                threadId !== null,
+                existing.projectId,
+                input.baseRef,
+              );
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
@@ -2287,6 +2320,7 @@ const make = Effect.gen(function* () {
           modelSelection: existing.modelSelection,
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
+          ...(input.autoSettle === undefined ? {} : { autoSettle: input.autoSettle }),
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };
