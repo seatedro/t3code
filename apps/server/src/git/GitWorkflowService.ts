@@ -31,6 +31,7 @@ import {
   type VcsStatusRemoteResult,
   type VcsStatusResult,
   type VcsStatusVcs,
+  type VcsWorkspaceProblem,
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
@@ -58,6 +59,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly localStatus: (
       input: VcsStatusInput,
+      options?: { readonly snapshotWorkingCopy?: boolean },
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly remoteStatus: (
       input: VcsStatusInput,
@@ -218,17 +220,46 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // Observe-mode reads cannot detect a stale workspace, so the last foreground snapshot's verdict
+  // sticks until a later snapshot succeeds.
+  const staleWorkspaces = new Map<string, VcsWorkspaceProblem>();
+
+  const snapshotJjWorkingCopy = Effect.fn("GitWorkflowService.snapshotJjWorkingCopy")(function* (
+    rootPath: string,
+  ) {
+    const problem = yield* jjCli
+      .run({
+        operation: "GitWorkflowService.snapshotJjWorkingCopy",
+        cwd: rootPath,
+        args: ["util", "snapshot"],
+        workingCopy: "snapshot",
+      })
+      .pipe(
+        Effect.as(null),
+        Effect.catch((error) => Effect.succeed(JjVcsDriver.problemFromError(error))),
+      );
+    if (problem?.code === "stale") staleWorkspaces.set(rootPath, problem);
+    else staleWorkspaces.delete(rootPath);
+    return problem;
+  });
+
   const statusVcs = Effect.fn("GitWorkflowService.statusVcs")(function* (
     handle: VcsDriverRegistry.VcsDriverHandle,
+    snapshotWorkingCopy: boolean,
   ) {
     if (handle.kind !== "jj") return { kind: handle.kind } satisfies VcsStatusVcs;
     if (handle.problem) return { kind: "jj", problem: handle.problem } satisfies VcsStatusVcs;
-    return yield* Cache.get(workspaceNames, handle.repository.rootPath).pipe(
-      Effect.map((name): VcsStatusVcs =>
-        name !== null && name.length > 0 && name === name.trim()
-          ? { kind: "jj", workspaceName: name }
-          : { kind: "jj" },
-      ),
+    const rootPath = handle.repository.rootPath;
+    const snapshotProblem = snapshotWorkingCopy ? yield* snapshotJjWorkingCopy(rootPath) : null;
+    const problem = snapshotProblem ?? staleWorkspaces.get(rootPath);
+    return yield* Cache.get(workspaceNames, rootPath).pipe(
+      Effect.map((name): VcsStatusVcs => ({
+        kind: "jj",
+        ...(name !== null && name.length > 0 && name === name.trim()
+          ? { workspaceName: name }
+          : {}),
+        ...(problem ? { problem } : {}),
+      })),
       Effect.catch((error) =>
         Effect.succeed<VcsStatusVcs>({
           kind: "jj",
@@ -437,12 +468,15 @@ export const make = Effect.gen(function* () {
           ...problemLocalStatus({ kind: handle.kind, problem: handle.problem }),
         };
       }
-      const [status, vcs] = yield* Effect.all([gitManager.status(input), statusVcs(handle)], {
-        concurrency: "unbounded",
-      });
+      const [status, vcs] = yield* Effect.all(
+        [gitManager.status(input), statusVcs(handle, false)],
+        {
+          concurrency: "unbounded",
+        },
+      );
       return { ...status, vcs };
     }),
-    localStatus: Effect.fn("GitWorkflowService.localStatus")(function* (input) {
+    localStatus: Effect.fn("GitWorkflowService.localStatus")(function* (input, options) {
       const handle = yield* detectGitRepositoryForStatus(
         "GitWorkflowService.localStatus",
         input.cwd,
@@ -451,9 +485,15 @@ export const make = Effect.gen(function* () {
       if (handle.problem) {
         return problemLocalStatus({ kind: handle.kind, problem: handle.problem });
       }
-      const [status, vcs] = yield* Effect.all([gitManager.localStatus(input), statusVcs(handle)], {
-        concurrency: "unbounded",
-      });
+      // A jj snapshot rewrites the Git index, so Git status must read after it.
+      const snapshotVcs = options?.snapshotWorkingCopy ? yield* statusVcs(handle, true) : null;
+      const [status, vcs] = yield* Effect.all(
+        [
+          gitManager.localStatus(input),
+          snapshotVcs ? Effect.succeed(snapshotVcs) : statusVcs(handle, false),
+        ],
+        { concurrency: "unbounded" },
+      );
       return { ...status, vcs };
     }),
     remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function* (input, options) {

@@ -251,6 +251,26 @@ server, but the host's own site will not show them, and the count reads **viewed
 On mobile, open a changed file and mark it viewed from its header. Viewed files collapse,
 and their marks follow the same rules as on web and desktop.
 
+## Jujutsu (jj)
+
+T3 Code works in Jujutsu repositories that are colocated with Git, which is the default for
+`jj git init` and `jj git clone`. It needs jj 0.46 or newer and Git 2.42 or newer on the machine
+running your T3 Code server. **Settings → Source control** shows the jj version it found. Repositories
+that are not colocated are recognized but unsupported.
+
+New threads in their own workspace get a jj workspace instead of a Git worktree. It is also a Git
+worktree, so commit, push, pull requests, and review work as they do in Git. The thread's branch is
+a bookmark of the same name. Restore returns a turn's files without rewriting your other workspaces,
+and it refuses when another workspace builds on the thread's working copy.
+
+jj does not copy ignored files such as `.env` or `node_modules` into new workspaces. Use the
+project's setup script for them. Repositories with submodules can't use jj workspaces yet.
+Automatic cleanup leaves jj workspaces alone.
+
+If you rebase or rewrite a thread's change from another workspace, that workspace goes stale and
+shows **Repair available**. **Repair** saves the workspace's files to a hidden Git ref first, then
+brings the workspace up to date. If jj reports divergent changes afterward, resolve them with jj.
+
 ## Troubleshooting
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,

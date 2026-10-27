@@ -193,6 +193,33 @@ describe.skipIf(!JjFixture.jjAvailable)("GitWorkflowService in a colocated jj re
     }).pipe(Effect.provide(layerWorkflow(layerRealRegistry))),
   );
 
+  it.live("keeps a stale workspace visible until a foreground snapshot succeeds again", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-workflow-jj-" });
+      const main = path.join(parent, "main");
+      const ws = path.join(parent, "ws1");
+      yield* fileSystem.makeDirectory(main);
+      yield* JjFixture.createColocatedRepo(main);
+      yield* JjFixture.writeFile(main, "README.md", "hello\n");
+      yield* JjFixture.runJj(main, ["commit", "-m", "init"]);
+      yield* JjFixture.addWorkspace(main, "ws1", ws);
+      yield* JjFixture.makeWorkspaceStale(main, "ws1");
+
+      assert.isUndefined((yield* workflow.localStatus({ cwd: ws })).vcs?.problem);
+      const foreground = yield* workflow.localStatus({ cwd: ws }, { snapshotWorkingCopy: true });
+      assert.strictEqual(foreground.vcs?.problem?.code, "stale");
+      assert.strictEqual((yield* workflow.localStatus({ cwd: ws })).vcs?.problem?.code, "stale");
+
+      yield* JjFixture.runJj(ws, ["workspace", "update-stale"]);
+      const repaired = yield* workflow.localStatus({ cwd: ws }, { snapshotWorkingCopy: true });
+      assert.isUndefined(repaired.vcs?.problem);
+      assert.isUndefined((yield* workflow.localStatus({ cwd: ws })).vcs?.problem);
+    }).pipe(Effect.provide(layerWorkflow(layerRealRegistry))),
+  );
+
   it.live("never prunes Git worktrees, which would un-colocate absent jj workspaces", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
