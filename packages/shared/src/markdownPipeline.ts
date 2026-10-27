@@ -157,6 +157,8 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       "t3-citation",
       "t3-context",
       THREAD_LINK_PROTOCOL,
+      // Fork: Diffy pull request links; clients narrow these to github.com pull requests.
+      "diffy",
     ],
     src: [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"],
   },
