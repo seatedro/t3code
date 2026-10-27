@@ -1,0 +1,51 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: sync-upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      SELF: .github/workflows/sync-upstream.yml
+    steps:
+      - name: Disable upstream workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: &disable |
+          gh workflow list --repo "$REPO" --all --json id,path,state \
+            --jq '.[] | select(.path != env.SELF and .state == "active") | .id' |
+            xargs -r -n1 gh workflow disable --repo "$REPO"
+
+      - name: Fast-forward main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: gh repo sync "$REPO" --branch main --source pingdotgg/t3code
+
+      - name: Disable newly added upstream workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: *disable
+
+      - name: Open sync PR
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          behind=$(gh api "repos/$REPO/compare/rohit/changes...main" --jq .ahead_by)
+          echo "rohit/changes is $behind commits behind main"
+          [ "$behind" -gt 0 ] || exit 0
+          open=$(gh pr list --repo "$REPO" --head main --base rohit/changes --state open --json number --jq length)
+          [ "$open" -eq 0 ] || exit 0
+          gh pr create --repo "$REPO" --head main --base rohit/changes \
+            --title "Sync upstream main" \
+            --body "Upstream \`pingdotgg/t3code\` main has $behind new commits. Rebase \`rohit/changes\` onto \`main\` and force-push; this PR closes as merged once \`rohit/changes\` contains \`main\`."
