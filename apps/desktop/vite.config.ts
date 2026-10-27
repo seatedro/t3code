@@ -2,6 +2,7 @@ import "vite-plus/test/config";
 import { defaultInclude, defineConfig } from "vite-plus";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
+import { withForkBrand } from "../../scripts/lib/fork-brand.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoEnv = loadRepoEnv();
@@ -54,7 +55,7 @@ export default defineConfig({
       },
     },
   },
-  pack: [
+  pack: withForkBrand([
     {
       format: "cjs",
       outDir: "dist-electron",
@@ -149,7 +150,7 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/mac-permission-preload.ts"],
     },
-  ],
+  ]),
   test: {
     include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
     // The Windows lane runs workspace suites concurrently; filesystem-heavy

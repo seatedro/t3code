@@ -33,6 +33,7 @@
     "test",
     "scripts/verify-built-boot.ts",
     "scripts/warm-dep-cache.ts",
+    "../../scripts/lib/fork-brand.ts",
     "../../scripts/lib/public-config.ts",
     "../../scripts/lib/third-party-licenses.ts"
   ]
