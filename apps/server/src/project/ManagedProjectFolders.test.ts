@@ -27,11 +27,13 @@ import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import * as ManagedProjectFolders from "./ManagedProjectFolders.ts";
+import * as JjWorkspaces from "../vcs/jj/JjWorkspaces.ts";
 
 const layerGitWorkflow = (vcsProcess?: Layer.Layer<VcsProcess.VcsProcess>) =>
   GitWorkflow.layer.pipe(
     Layer.provide(VcsDriverRegistry.layer),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(Layer.mock(JjWorkspaces.JjWorkspaces)({ repoRoot: () => Effect.succeed(null) })),
     Layer.provide(vcsProcess ?? VcsProcess.layer),
   );
 

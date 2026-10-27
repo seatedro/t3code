@@ -15,6 +15,9 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as JjCli from "../vcs/jj/JjCli.ts";
+import * as JjWorkspaces from "../vcs/jj/JjWorkspaces.ts";
 
 it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
   it.effect("finds a name among the refs of every namespace", () =>
@@ -47,6 +50,9 @@ it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
             }),
           ),
           Layer.provide(Layer.mock(GitManager.GitManager)({})),
+          Layer.provide(
+            Layer.mock(JjWorkspaces.JjWorkspaces)({ repoRoot: () => Effect.succeed(null) }),
+          ),
           Layer.provideMerge(GitVcsDriver.layer),
           Layer.provideMerge(VcsProcess.layer),
           Layer.provideMerge(
@@ -78,6 +84,7 @@ const layerWorkflow = (registry: Layer.Layer<VcsDriverRegistry.VcsDriverRegistry
         localStatus: () => Effect.succeed(gitLocalStatus),
       }),
     ),
+    Layer.provide(JjWorkspaces.layer.pipe(Layer.provide(registry), Layer.provide(JjCli.layer))),
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
     Layer.provideMerge(
@@ -85,6 +92,7 @@ const layerWorkflow = (registry: Layer.Layer<VcsDriverRegistry.VcsDriverRegistry
         Layer.provide(NodeServices.layer),
       ),
     ),
+    Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provideMerge(JjFixture.layerIsolatedEnv),
     Layer.provideMerge(NodeServices.layer),
   );

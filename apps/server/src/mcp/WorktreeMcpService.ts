@@ -255,14 +255,16 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as({ status: "failed", detail } as const));
           });
 
+        // A jj workspace may hold work jj already recorded; roll back only an untouched one.
+        const force = localStatus.vcs?.kind !== "jj";
         const removeCreatedWorktree = Effect.suspend(() =>
-          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
+          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force }).pipe(
             Effect.andThen(
               Effect.suspend(() =>
                 gitWorkflow.deleteLocalBranch({
                   cwd: projectCwd,
                   refName: worktree.worktree.refName,
-                  force: true,
+                  force,
                 }),
               ),
             ),

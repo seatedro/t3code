@@ -114,6 +114,7 @@ interface HarnessOptions {
   readonly worktreeBaseMissing?: boolean;
   readonly removeWorktreeFails?: boolean;
   readonly deleteLocalBranchFails?: boolean;
+  readonly jj?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
   readonly notJj?: boolean;
 }
@@ -257,6 +258,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const localStatus = vi.fn((_: unknown) =>
     Effect.succeed({
       isRepo: options.notARepo !== true,
+      ...(options.jj ? { vcs: { kind: "jj" as const } } : {}),
       hasPrimaryRemote: true,
       isDefaultRef: false,
       refName: options.currentBranch === undefined ? "dev" : options.currentBranch,
@@ -567,6 +569,24 @@ describe("t3_worktree_handoff", () => {
         force: true,
       });
       expect(harness.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("rolls back a jj workspace only when it is untouched", () => {
+    const harness = makeHarness({ threadAttachedOnRecheck: true, jj: true });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/jj-raced" }));
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
+      expect(harness.removeWorktree).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        path: "/worktrees/project/feature/jj-raced",
+        force: false,
+      });
+      expect(harness.deleteLocalBranch).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        refName: "feature/jj-raced",
+        force: false,
+      });
     });
   });
 
