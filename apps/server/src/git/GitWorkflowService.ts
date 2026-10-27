@@ -1,5 +1,8 @@
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 
@@ -27,10 +30,13 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsStatusVcs,
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as JjCli from "../vcs/jj/JjCli.ts";
+import * as JjVcsDriver from "../vcs/jj/JjVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
@@ -147,6 +153,11 @@ function nonRepositoryLocalStatus(): VcsStatusLocalResult {
   };
 }
 
+// The repository exists but Git cannot read it; clients show the problem instead of a clean tree.
+function problemLocalStatus(vcs: VcsStatusVcs): VcsStatusLocalResult {
+  return { ...nonRepositoryLocalStatus(), isRepo: true, vcs };
+}
+
 function nonRepositoryStatus(): VcsStatusResult {
   return {
     ...nonRepositoryLocalStatus(),
@@ -168,12 +179,63 @@ function nonRepositoryListRefs(): VcsListRefsResult {
   };
 }
 
+const WORKSPACE_NAME_CACHE_TTL = Duration.seconds(30);
+
+// A colocated jj workspace is a real Git worktree, so Git workflows run unchanged there.
+const isGitBacked = (handle: VcsDriverRegistry.VcsDriverHandle) =>
+  handle.kind === "git" || (handle.kind === "jj" && handle.problem === undefined);
+
+const unsupportedDetail = (
+  subject: "workflow" | "command",
+  operation: string,
+  handle: VcsDriverRegistry.VcsDriverHandle,
+) =>
+  handle.problem
+    ? `The ${operation} ${subject} is unavailable in this ${handle.kind} repository: ${handle.problem.message}`
+    : `The ${operation} ${subject} currently supports Git repositories only; detected ${handle.kind}.`;
+
 /** @public */
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const jjCli = yield* JjCli.make;
+
+  const workspaceNames = yield* Cache.makeWith(
+    (rootPath: string) =>
+      JjVcsDriver.readCurrentWorkspaceName(rootPath).pipe(
+        Effect.provideService(JjCli.JjCli, jjCli),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      ),
+    {
+      capacity: 256,
+      timeToLive: Exit.match({
+        onSuccess: () => WORKSPACE_NAME_CACHE_TTL,
+        onFailure: () => Duration.zero,
+      }),
+    },
+  );
+
+  const statusVcs = Effect.fn("GitWorkflowService.statusVcs")(function* (
+    handle: VcsDriverRegistry.VcsDriverHandle,
+  ) {
+    if (handle.kind !== "jj") return { kind: handle.kind } satisfies VcsStatusVcs;
+    if (handle.problem) return { kind: "jj", problem: handle.problem } satisfies VcsStatusVcs;
+    return yield* Cache.get(workspaceNames, handle.repository.rootPath).pipe(
+      Effect.map((name): VcsStatusVcs =>
+        name !== null && name.length > 0 && name === name.trim()
+          ? { kind: "jj", workspaceName: name }
+          : { kind: "jj" },
+      ),
+      Effect.catch((error) =>
+        Effect.succeed<VcsStatusVcs>({
+          kind: "jj",
+          problem: JjVcsDriver.problemFromError(error),
+        }),
+      ),
+    );
+  });
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -197,11 +259,11 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitManagerError({
         operation,
         cwd,
-        detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
+        detail: `${unsupportedDetail("workflow", operation, handle)} (${cwd})`,
       });
     }
     return handle;
@@ -223,12 +285,12 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
         cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+        detail: unsupportedDetail("command", operation, handle),
       });
     }
     return handle;
@@ -248,16 +310,16 @@ export const make = Effect.gen(function* () {
         ),
       );
       if (!handle) {
-        return false;
+        return null;
       }
-      if (handle.kind !== "git") {
+      if (handle.kind !== "git" && handle.kind !== "jj") {
         return yield* new GitManagerError({
           operation,
           cwd,
-          detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
+          detail: `${unsupportedDetail("workflow", operation, handle)} (${cwd})`,
         });
       }
-      return true;
+      return handle;
     },
   );
 
@@ -279,12 +341,12 @@ export const make = Effect.gen(function* () {
     if (!handle) {
       return false;
     }
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
         cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+        detail: unsupportedDetail("command", operation, handle),
       });
     }
     return true;
@@ -301,7 +363,7 @@ export const make = Effect.gen(function* () {
   return GitWorkflowService.of({
     isRepository: Effect.fn("GitWorkflowService.isRepository")(function (cwd) {
       return registry.detect({ cwd }).pipe(
-        Effect.map((handle) => handle?.kind === "git"),
+        Effect.map((handle) => handle !== null && isGitBacked(handle)),
         Effect.mapError(
           (cause) =>
             new GitManagerError({
@@ -346,28 +408,41 @@ export const make = Effect.gen(function* () {
             Effect.map((result) => result.stdout.trim().length > 0),
           );
     }),
-    status: Effect.fn("GitWorkflowService.status")(function (input) {
-      return detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository ? gitManager.status(input) : Effect.succeed(nonRepositoryStatus()),
-        ),
-      );
+    status: Effect.fn("GitWorkflowService.status")(function* (input) {
+      const handle = yield* detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd);
+      if (!handle) return nonRepositoryStatus();
+      if (handle.problem) {
+        return {
+          ...nonRepositoryStatus(),
+          ...problemLocalStatus({ kind: handle.kind, problem: handle.problem }),
+        };
+      }
+      const [status, vcs] = yield* Effect.all([gitManager.status(input), statusVcs(handle)], {
+        concurrency: "unbounded",
+      });
+      return { ...status, vcs };
     }),
-    localStatus: Effect.fn("GitWorkflowService.localStatus")(function (input) {
-      return detectGitRepositoryForStatus("GitWorkflowService.localStatus", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository
-            ? gitManager.localStatus(input)
-            : Effect.succeed(nonRepositoryLocalStatus()),
-        ),
+    localStatus: Effect.fn("GitWorkflowService.localStatus")(function* (input) {
+      const handle = yield* detectGitRepositoryForStatus(
+        "GitWorkflowService.localStatus",
+        input.cwd,
       );
+      if (!handle) return nonRepositoryLocalStatus();
+      if (handle.problem) {
+        return problemLocalStatus({ kind: handle.kind, problem: handle.problem });
+      }
+      const [status, vcs] = yield* Effect.all([gitManager.localStatus(input), statusVcs(handle)], {
+        concurrency: "unbounded",
+      });
+      return { ...status, vcs };
     }),
-    remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function (input, options) {
-      return detectGitRepositoryForStatus("GitWorkflowService.remoteStatus", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository ? gitManager.remoteStatus(input, options) : Effect.succeed(null),
-        ),
+    remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function* (input, options) {
+      const handle = yield* detectGitRepositoryForStatus(
+        "GitWorkflowService.remoteStatus",
+        input.cwd,
       );
+      if (!handle || handle.problem) return null;
+      return yield* gitManager.remoteStatus(input, options);
     }),
     invalidateLocalStatus: gitManager.invalidateLocalStatus,
     invalidateRemoteStatus: gitManager.invalidateRemoteStatus,
@@ -466,8 +541,11 @@ export const make = Effect.gen(function* () {
       );
     }),
     pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function (input) {
+      // `git worktree prune` un-colocates absent sibling jj workspaces.
       return ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
-        Effect.andThen(git.pruneWorktrees(input)),
+        Effect.flatMap((handle) =>
+          handle.kind === "jj" ? Effect.void : git.pruneWorktrees(input),
+        ),
       );
     }),
     deleteLocalBranch: Effect.fn("GitWorkflowService.deleteLocalBranch")(function (input) {

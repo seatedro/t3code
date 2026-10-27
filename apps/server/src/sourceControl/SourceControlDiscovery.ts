@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
+import * as JjCli from "../vcs/jj/JjCli.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { detailFromCause, firstNonEmptyLine } from "@t3tools/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
@@ -19,6 +20,8 @@ interface DiscoveryProbe {
   readonly versionArgs?: ReadonlyArray<string>;
   readonly implemented: boolean;
   readonly installHint: string;
+  /** Detail shown when the installed version cannot be used. */
+  readonly unsupportedVersionDetail?: (output: string) => string | null;
 }
 
 type VcsProbe = DiscoveryProbe & {
@@ -52,8 +55,14 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
     label: "Jujutsu",
     executable: "jj",
     versionArgs: ["--version"],
-    implemented: false,
+    implemented: true,
     installHint: "Install Jujutsu with `brew install jj` or from https://github.com/jj-vcs/jj.",
+    unsupportedVersionDetail: (output) => {
+      const version = JjCli.parseJjVersion(output);
+      return version !== null && JjCli.isSupportedJjVersion(version)
+        ? null
+        : `T3 Code supports Jujutsu ${JjCli.JJ_MIN_VERSION} or newer.`;
+    },
   },
 ];
 
@@ -111,7 +120,7 @@ export const make = Effect.gen(function* () {
                 firstNonEmptyLine(result.stderr),
               ),
               installHint: input.installHint,
-              detail: Option.none<string>(),
+              detail: Option.fromNullishOr(input.unsupportedVersionDetail?.(result.stdout)),
             }) satisfies DiscoveryProbeResult<Kind>,
         ),
         Effect.catch((cause) =>

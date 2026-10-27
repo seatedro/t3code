@@ -30,8 +30,9 @@ import * as ManagedProjectFolders from "./ManagedProjectFolders.ts";
 
 const layerGitWorkflow = (vcsProcess?: Layer.Layer<VcsProcess.VcsProcess>) =>
   GitWorkflow.layer.pipe(
-    Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(vcsProcess ?? VcsProcess.layer))),
+    Layer.provide(VcsDriverRegistry.layer),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(vcsProcess ?? VcsProcess.layer),
   );
 
 const layerEnrichment = ProjectEnrichmentService.layer.pipe(
