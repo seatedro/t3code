@@ -42,6 +42,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import { isSqlError } from "effect/sql/SqlError";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -204,6 +205,7 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly auto_settle: number;
 }
 
 interface WebhookDeliveryRow {
@@ -333,6 +335,7 @@ const decodeRow = Effect.fnUntraced(
       modelSelection,
       runtimeMode: row.runtime_mode,
       interactionMode: row.interaction_mode,
+      ...(row.auto_settle === 1 ? { autoSettle: true } : {}),
       createdBy: row.created_by,
       creationSource: row.creation_source,
       createdAt: row.created_at,
@@ -394,6 +397,10 @@ export const layer = Layer.effect(
   ScheduledTaskService,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // Fork-only: a numbered migration would collide with upstream's next id.
+    yield* sql`CREATE TABLE IF NOT EXISTS scheduled_task_auto_settle (task_id TEXT PRIMARY KEY)`.pipe(
+      Effect.orDie,
+    );
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -446,7 +453,11 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        EXISTS (
+          SELECT 1 FROM scheduled_task_auto_settle flag
+          WHERE flag.task_id = scheduled_tasks.task_id
+        ) AS auto_settle
       FROM scheduled_tasks
       -- Not updated_at: toggles, runs and edits rewrite it, and clients render
       -- this order as-is, so rows would move under the pointer.
@@ -483,7 +494,11 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        EXISTS (
+          SELECT 1 FROM scheduled_task_auto_settle flag
+          WHERE flag.task_id = scheduled_tasks.task_id
+        ) AS auto_settle
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
@@ -626,6 +641,7 @@ export const layer = Layer.effect(
       sql
         .withTransaction(
           sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${id}`.pipe(
+            Effect.andThen(sql`DELETE FROM scheduled_task_auto_settle WHERE task_id = ${id}`),
             Effect.andThen(sql`DELETE FROM scheduled_tasks WHERE task_id = ${id}`),
           ),
         )
@@ -1148,6 +1164,7 @@ export const layer = Layer.effect(
         modelSelection: input.modelSelection,
         runtimeMode: input.runtimeMode,
         interactionMode: input.interactionMode,
+        ...((input.autoSettle ?? existingTask?.autoSettle) === true ? { autoSettle: true } : {}),
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),
@@ -1160,7 +1177,19 @@ export const layer = Layer.effect(
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
-      yield* saveTask(task, input.requireExisting === true, webhook);
+      yield* saveTask(task, input.requireExisting === true, webhook).pipe(
+        Effect.andThen(
+          task.autoSettle === true
+            ? sql`INSERT OR IGNORE INTO scheduled_task_auto_settle (task_id) VALUES (${id})`
+            : sql`DELETE FROM scheduled_task_auto_settle WHERE task_id = ${id}`,
+        ),
+        sql.withTransaction,
+        Effect.mapError((cause) =>
+          isSqlError(cause)
+            ? taskError("Could not save schedule task.", { taskId: id, cause })
+            : cause,
+        ),
+      );
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });
@@ -1244,6 +1273,10 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             yield* sql`
             DELETE FROM scheduled_task_webhook_deliveries
+            WHERE task_id IN (SELECT task_id FROM scheduled_tasks WHERE thread_id = ${threadId})
+          `;
+            yield* sql`
+            DELETE FROM scheduled_task_auto_settle
             WHERE task_id IN (SELECT task_id FROM scheduled_tasks WHERE thread_id = ${threadId})
           `;
             return yield* sql<{ task_id: ScheduledTaskId }>`

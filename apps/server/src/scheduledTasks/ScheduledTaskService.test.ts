@@ -402,3 +402,49 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect("keeps auto-settle across saves that omit it and drops it with the task", () =>
+  Effect.gen(function* () {
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
+          NodeCrypto.layer,
+          Scheduler.layer,
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const input = {
+        id: ScheduledTaskId.make("task:auto-settle"),
+        title: "Rebase fork",
+        prompt: "Rebase onto upstream",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      } as const;
+      yield* service.upsert({ ...input, autoSettle: true });
+      const { task } = yield* service.upsert({ ...input, title: "Rebase fork daily" });
+      assert.strictEqual(task.autoSettle, true);
+
+      yield* service.upsert({ ...input, autoSettle: false });
+      assert.isUndefined((yield* service.list()).tasks[0]?.autoSettle);
+
+      yield* service.upsert({ ...input, autoSettle: true });
+      yield* service.delete({ id: input.id });
+      const { task: recreated } = yield* service.upsert(input);
+      assert.isUndefined(recreated.autoSettle);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);

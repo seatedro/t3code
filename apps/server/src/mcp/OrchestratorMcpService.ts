@@ -252,14 +252,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
-}
-
 function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
   return {
     scheduledTaskId: task.id,
@@ -271,6 +263,10 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    autoSettle: task.autoSettle === true,
+    ...(task.workspaceStrategy.type === "worktree"
+      ? { baseRef: task.workspaceStrategy.baseRef }
+      : {}),
     ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
@@ -981,6 +977,46 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
+  /** Bound runs share the project checkout; new-thread runs get a worktree from `baseRef`. */
+  const scheduledTaskWorkspaceStrategy = Effect.fn(
+    "OrchestratorMcpService.scheduledTaskWorkspaceStrategy",
+  )(function* (
+    project: { readonly id: ProjectId; readonly workspaceRoot: string },
+    boundToThread: boolean,
+    baseRef: string | undefined,
+  ): Effect.fn.Return<ScheduledTask["workspaceStrategy"], OrchestratorMcpFailure> {
+    if (boundToThread) {
+      if (baseRef !== undefined)
+        return yield* failure(
+          "invalid_request",
+          "`baseRef` applies only to tasks that run in a new thread (bindToCurrentThread=false).",
+        );
+      return { type: "root" };
+    }
+    const strategy = {
+      type: "worktree" as const,
+      baseRef:
+        baseRef ??
+        (yield* gitDriver.resolvePrimaryRemoteName(project.workspaceRoot).pipe(
+          Effect.flatMap((remote) =>
+            gitDriver.resolveDefaultBranchName(project.workspaceRoot, remote),
+          ),
+          Effect.orElseSucceed(() => null),
+        )) ??
+        "main",
+      startFromOrigin: true,
+    };
+    if (baseRef !== undefined)
+      yield* threadLaunch
+        .checkWorktreeBase({ projectId: project.id, workspaceStrategy: strategy })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("invalid_request", `${error.message} Pass a branch that exists there.`),
+          ),
+        );
+    return strategy;
+  });
 
   const projectDefaultModelSelection = (
     project: Effect.Success<ReturnType<typeof requireProject>>,
@@ -1859,10 +1895,15 @@ const make = Effect.gen(function* () {
         schedule: input.schedule,
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-        workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+        workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
+          project,
+          bindToCurrentThread,
+          input.baseRef,
+        ),
         modelSelection,
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
+        ...(input.autoSettle === undefined ? {} : { autoSettle: input.autoSettle }),
         createdBy: "agent",
         creationSource: "mcp",
         // Scope the idempotency key by provider session so two callers
@@ -1929,9 +1970,13 @@ const make = Effect.gen(function* () {
               : null;
         // Update workspace strategy on rebinding so unbound root tasks cannot run in the shared checkout.
         const workspaceStrategy =
-          input.bindToCurrentThread === undefined
+          input.bindToCurrentThread === undefined && input.baseRef === undefined
             ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+            : yield* scheduledTaskWorkspaceStrategy(
+                yield* requireProject(existing.projectId),
+                threadId !== null,
+                input.baseRef,
+              );
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
@@ -1944,6 +1989,7 @@ const make = Effect.gen(function* () {
           modelSelection: existing.modelSelection,
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
+          ...(input.autoSettle === undefined ? {} : { autoSettle: input.autoSettle }),
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };
