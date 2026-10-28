@@ -433,6 +433,21 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
+                // Fork: a subagent, or a task another machine delegated here, cannot judge what is
+                // already known, so it never gets memory.
+                const delegatedHere = yield* projectionStore.getThread(threadId).pipe(
+                  Effect.map((thread) => thread.delegatedFrom !== undefined),
+                  Effect.orElseSucceed(() => false),
+                );
+                const memory =
+                  !subagent &&
+                  !delegatedHere &&
+                  Option.isSome(serverSettings) &&
+                  (yield* serverSettings.value.getSettings.pipe(
+                    Effect.map((settings) => settings.memoryEnabled),
+                    Effect.orElseSucceed(() => false),
+                  ));
+                if (memory) capabilities.add("memory");
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -454,6 +469,7 @@ export const layerWithOptions = (
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
+                    resolved.capabilities.has("memory") === memory &&
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent
                   ) {

@@ -92,3 +92,16 @@ describe("Codex device context", () => {
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
   return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
 }
+
+describe("Codex memory context", () => {
+  it("tells the agent about memory only when its credential carries it", () => {
+    const tools = (memory: boolean) =>
+      buildCodexAdditionalContext(
+        { model: "gpt-6.1-sol" },
+        { browser: false, device: false, memory },
+      ).t3_code_tools?.value ?? "";
+
+    NodeAssert.ok(tools(true).includes("call it with `wake` before any other tool"));
+    NodeAssert.ok(!tools(false).includes("memory"));
+  });
+});

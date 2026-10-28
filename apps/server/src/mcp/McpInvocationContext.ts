@@ -20,6 +20,8 @@ const ALL_MCP_CAPABILITIES = [
   "worktree",
   "device",
   "pull-requests",
+  // Fork: the thread's agent gets the memory tool and its instructions.
+  "memory",
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
@@ -146,11 +148,18 @@ export const hiddenWhileLinksOff = (): boolean => {
   return scope?.linkedEnvironments !== false;
 };
 
-/** `McpSchema.EnabledWhen` for the memory tool: on in settings, and never for a delegated child. */
+/**
+ * `McpSchema.EnabledWhen` for the memory tool: a thread credential issued with memory, which also
+ * carries the memory instructions, while the setting is still on.
+ */
 export const memoryToolVisible = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
-  return scope?.memoryEnabled === true && scope.thread?.subagent !== true;
+  return (
+    scope?.memoryEnabled === true &&
+    scope.capabilities.has("memory") &&
+    scope.thread?.subagent !== true
+  );
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"

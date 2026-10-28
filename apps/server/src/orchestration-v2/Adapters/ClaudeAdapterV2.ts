@@ -174,7 +174,9 @@ import {
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
+  hasT3Memory,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
+  T3_CODE_MEMORY_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
@@ -1462,6 +1464,7 @@ export function makeClaudeQueryOptions(input: {
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   /** The thread's T3 MCP session holds the `device` capability. */
   readonly deviceToolsAvailable?: boolean;
+  readonly memory?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -1585,7 +1588,8 @@ export function makeClaudeQueryOptions(input: {
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
               (deviceInstructions
                 ? `\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH}\n`
-                : "")),
+                : "") +
+              (input.memory === true ? `\n${T3_CODE_MEMORY_INSTRUCTIONS}\n` : "")),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
@@ -9939,6 +9943,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
+            memory: hasT3Memory(mcpSession),
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
               ? {}
