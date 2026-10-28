@@ -202,6 +202,22 @@ describe.skipIf(NodeChildProcess.spawnSync("jj", ["--version"]).status !== 0)(
       }).pipe(Effect.provide(layerWorkspaces), Effect.scoped),
     );
 
+    it.live("imports a git commit without leaving its new files staged for deletion", () =>
+      Effect.gen(function* () {
+        const { fs, service, create } = yield* fixture;
+        const { path } = yield* create("commit");
+        yield* fs.writeFileString(`${path}/new.txt`, "agent work\n");
+        // A turn-boundary snapshot records new.txt as intent-to-add in git's index.
+        yield* run("jj", path, ["util", "snapshot"]);
+        yield* run("git", path, ["add", "-A"]);
+        yield* run("git", path, ["commit", "-qm", "agent work"]);
+
+        yield* service.importGitRefs(path);
+
+        expect(yield* run("git", path, ["status", "--porcelain"])).toBe("");
+      }).pipe(Effect.provide(layerWorkspaces), Effect.scoped),
+    );
+
     it.live("fails with bookmark moved when the branch left HEAD's history", () =>
       Effect.gen(function* () {
         const { fs, root, first, service, create } = yield* fixture;

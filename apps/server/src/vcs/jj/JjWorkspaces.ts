@@ -204,7 +204,9 @@ const make = Effect.gen(function* () {
       operation: "JjWorkspaces.importGitRefs",
       cwd,
       args: ["git", "import"],
-      workingCopy: "observe",
+      // With --ignore-working-copy, importing a moved HEAD rewrites git's index from jj's stale
+      // view, staging new files of the imported commit for deletion.
+      workingCopy: "snapshot",
     });
   });
 
