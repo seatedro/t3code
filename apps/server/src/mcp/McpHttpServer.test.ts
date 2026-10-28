@@ -2006,7 +2006,8 @@ it.effect(
             subagent,
           },
           client: undefined,
-          capabilities: new Set(["orchestration"]),
+          // As ProviderSessionManager issues them: a subagent's credential never carries memory.
+          capabilities: new Set(subagent ? ["orchestration"] : ["orchestration", "memory"]),
           issuedAt: 1,
         });
         const scopes = new Map([

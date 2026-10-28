@@ -29,6 +29,15 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
 
+// Fork: sent only to threads whose MCP credential carries `memory`, which follows Settings → Memory.
+export const T3_CODE_MEMORY_INSTRUCTIONS = `## T3 Code memory
+
+The \`memory\` tool is your permanent memory in this environment. In a new thread, call it with \`wake\` before any other tool and do what it prints, to the end. As you work, \`note\` what is worth keeping. Subagents you start never use it.`;
+
+export const hasT3Memory = (
+  session: { readonly capabilities?: ReadonlySet<string> | undefined } | undefined,
+): boolean => session?.capabilities?.has("memory") === true;
+
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code browser
@@ -71,6 +80,7 @@ export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly memory?: boolean;
 }
 
 /** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
@@ -84,7 +94,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
     input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
-    input.previousState.hasDeviceTools === input.state.hasDeviceTools
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools &&
+    input.previousState.memory === input.state.memory
   ) {
     return input.prompt;
   }
@@ -98,16 +109,17 @@ export function t3AcpPromptWithInstructions(input: {
           ...(input.state.hasDeviceTools ? [T3_CODE_DEVICE_TOOL_INSTRUCTIONS] : []),
           T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
+          ...(input.state.memory === true ? [T3_CODE_MEMORY_INSTRUCTIONS] : []),
         ]
       : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-const orchestrationInstructions = (hasDeviceTools: boolean) =>
-  hasDeviceTools
-    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
-    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+const orchestrationInstructions = (hasDeviceTools: boolean, memory: boolean) =>
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS +
+  (hasDeviceTools ? `\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n` : "") +
+  (memory ? `\n${T3_CODE_MEMORY_INSTRUCTIONS}\n` : "");
 
 function prependT3OrchestrationInstructions(prompt: string, instructions: string): string {
   return `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
@@ -118,6 +130,7 @@ export function t3OrchestrationPrompt(input: {
   readonly prompt: string;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly memory?: boolean;
   readonly orchestrationDelivered: boolean;
   readonly deviceInstructionsDelivered: boolean;
 }): string {
@@ -125,7 +138,7 @@ export function t3OrchestrationPrompt(input: {
   if (!input.orchestrationDelivered) {
     return prependT3OrchestrationInstructions(
       input.prompt,
-      orchestrationInstructions(input.hasDeviceTools),
+      orchestrationInstructions(input.hasDeviceTools, input.memory === true),
     );
   }
   return input.hasDeviceTools && !input.deviceInstructionsDelivered
@@ -136,6 +149,7 @@ export function t3OrchestrationPrompt(input: {
 export function t3OrchestrationSystemPrompt(
   hasT3Mcp: boolean,
   hasDeviceTools: boolean,
+  memory = false,
 ): string | undefined {
-  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools) : undefined;
+  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools, memory) : undefined;
 }

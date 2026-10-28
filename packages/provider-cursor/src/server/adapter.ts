@@ -57,7 +57,10 @@ import {
   rewriteCursorSkillMentions,
 } from "./skills.ts";
 import { cursorWorkspaceMcpServers } from "./workspaceMcpServers.ts";
-import { t3OrchestrationPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  hasT3Memory,
+  t3OrchestrationPrompt,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -2442,6 +2445,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           hasDeviceTools: boolean,
           delivered: { readonly orchestration: boolean; readonly device: boolean },
           interrupted: string | undefined,
+          memory: boolean,
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
@@ -2459,6 +2463,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             }),
             hasT3Mcp: mcpServers !== undefined,
             hasDeviceTools,
+            memory,
             orchestrationDelivered: delivered.orchestration,
             deviceInstructionsDelivered: delivered.device,
           });
@@ -2544,6 +2549,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               hasDeviceTools,
               delivered,
               interrupted?.agent === agent.nativeThreadId ? interrupted.text : undefined,
+              hasT3Memory(mcpSession),
             );
             const compacted = prompt === undefined;
             const pendingUpdates: Array<InteractionUpdate> = [];
