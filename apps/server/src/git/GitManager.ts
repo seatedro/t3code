@@ -97,6 +97,14 @@ export interface GitActionProgressReporter {
 export interface GitRunStackedActionOptions {
   readonly actionId?: string;
   readonly progressReporter?: GitActionProgressReporter;
+  /** Replaces `git commit` for repositories whose commits another VCS owns. */
+  readonly commit?: (input: {
+    readonly cwd: string;
+    readonly subject: string;
+    readonly body: string;
+    readonly branch: string | null;
+    readonly filePaths?: readonly string[];
+  }) => Effect.Effect<{ readonly commitSha: string }, GitCommandError>;
 }
 
 export interface GitRemoteStatusOptions extends GitVcsDriver.GitRemoteStatusOptions {
@@ -2114,6 +2122,7 @@ export const make = Effect.gen(function* () {
     filePaths?: readonly string[],
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    commitOverride?: GitRunStackedActionOptions["commit"],
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -2197,11 +2206,19 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      stage: filePaths ? { filePaths } : {},
-      ...(commitProgress ? { progress: commitProgress } : {}),
-    });
+    const { commitSha } = commitOverride
+      ? yield* commitOverride({
+          cwd,
+          subject: suggestion.subject,
+          body: suggestion.body,
+          branch,
+          ...(filePaths ? { filePaths } : {}),
+        })
+      : yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
+          timeoutMs: COMMIT_TIMEOUT_MS,
+          stage: filePaths ? { filePaths } : {},
+          ...(commitProgress ? { progress: commitProgress } : {}),
+        });
     if (currentHookName !== null) {
       yield* emit({
         kind: "hook_finished",
@@ -3139,6 +3156,7 @@ export const make = Effect.gen(function* () {
                   input.filePaths,
                   options?.progressReporter,
                   progress.actionId,
+                  options?.commit,
                 ),
               ),
             )

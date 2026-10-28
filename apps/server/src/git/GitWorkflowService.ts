@@ -520,14 +520,24 @@ export const make = Effect.gen(function* () {
           .ensureBranchAttached({ cwd: input.cwd })
           .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
       }
+      const actionOptions: GitManager.GitRunStackedActionOptions | undefined =
+        jjRoot === null
+          ? options
+          : {
+              ...options,
+              commit: (commit) =>
+                jjWorkspaces
+                  .commit(commit)
+                  .pipe(Effect.mapError(asGitCommandError(operation, commit.cwd))),
+            };
       const result = yield* ensureGit(operation, input.cwd).pipe(
         Effect.flatMap((handle) =>
           input.featureBranch
             ? withCheckoutLease(
                 handle.repository.rootPath,
-                gitManager.runStackedAction(input, options),
+                gitManager.runStackedAction(input, actionOptions),
               )
-            : gitManager.runStackedAction(input, options),
+            : gitManager.runStackedAction(input, actionOptions),
         ),
       );
       if (jjRoot !== null) yield* importJjRefs(operation, input.cwd);

@@ -259,9 +259,10 @@ running your T3 Code server. **Settings → Source control** shows the jj versio
 that are not colocated are recognized but unsupported.
 
 New threads in their own workspace get a jj workspace instead of a Git worktree. It is also a Git
-worktree, so commit, push, pull requests, and review work as they do in Git. The thread's branch is
-a bookmark of the same name. Restore returns a turn's files without rewriting your other workspaces,
-and it refuses when another workspace builds on the thread's working copy.
+worktree, so push, pull requests, and review work as they do in Git. The thread's branch is a
+bookmark of the same name. **Commit** runs `jj commit` and moves that bookmark to the new commit,
+so Git commit hooks such as pre-commit don't run. Restore returns a turn's files without rewriting
+your other workspaces, and it refuses when another workspace builds on the thread's working copy.
 
 jj does not copy ignored files such as `.env` or `node_modules` into new workspaces. Use the
 project's setup script for them. Repositories with submodules can't use jj workspaces yet.

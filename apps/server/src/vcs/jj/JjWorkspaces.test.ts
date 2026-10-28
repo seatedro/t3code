@@ -218,6 +218,45 @@ describe.skipIf(NodeChildProcess.spawnSync("jj", ["--version"]).status !== 0)(
       }).pipe(Effect.provide(layerWorkspaces), Effect.scoped),
     );
 
+    it.live("commits selected files with jj and moves the attached branch to the commit", () =>
+      Effect.gen(function* () {
+        const { fs, service, create } = yield* fixture;
+        const { path } = yield* create("native");
+        const changeId = yield* run("jj", path, [
+          "log",
+          "--no-graph",
+          "-r",
+          "@",
+          "-T",
+          "change_id",
+        ]);
+        yield* fs.writeFileString(`${path}/kept.txt`, "commit me\n");
+        yield* fs.writeFileString(`${path}/left.txt`, "not yet\n");
+
+        const { commitSha } = yield* service.commit({
+          cwd: path,
+          subject: "Add kept",
+          body: "Because.",
+          branch: "t3/native",
+          filePaths: ["kept.txt"],
+        });
+
+        expect(
+          yield* run("jj", path, [
+            "log",
+            "--no-graph",
+            "-r",
+            "t3/native",
+            "-T",
+            'change_id ++ " " ++ commit_id ++ " " ++ description',
+          ]),
+        ).toBe(`${changeId} ${commitSha} Add kept\n\nBecause.`);
+        expect(yield* run("git", path, ["symbolic-ref", "HEAD"])).toBe("refs/heads/t3/native");
+        expect(yield* run("git", path, ["rev-parse", "HEAD"])).toBe(commitSha);
+        expect(yield* run("jj", path, ["diff", "--name-only", "-r", "@"])).toBe("left.txt");
+      }).pipe(Effect.provide(layerWorkspaces), Effect.scoped),
+    );
+
     it.live("fails with bookmark moved when the branch left HEAD's history", () =>
       Effect.gen(function* () {
         const { fs, root, first, service, create } = yield* fixture;

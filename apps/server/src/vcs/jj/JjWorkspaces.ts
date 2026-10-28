@@ -75,6 +75,14 @@ export class JjWorkspaces extends Context.Service<
       readonly branch?: string;
     }) => Effect.Effect<void, JjWorkspacesError>;
     readonly importGitRefs: (cwd: string) => Effect.Effect<void, VcsError>;
+    /** `jj commit`, then moves `branch` to the new commit and reattaches HEAD for git pushes. */
+    readonly commit: (input: {
+      readonly cwd: string;
+      readonly subject: string;
+      readonly body: string;
+      readonly branch: string | null;
+      readonly filePaths?: readonly string[];
+    }) => Effect.Effect<{ readonly commitSha: string }, JjWorkspacesError>;
   }
 >()("t3/vcs/jj/JjWorkspaces") {}
 
@@ -508,6 +516,43 @@ const make = Effect.gen(function* () {
     yield* git.execute({ operation, cwd, args: ["switch", "-C", branch] });
   });
 
+  const commit: JjWorkspaces["Service"]["commit"] = Effect.fn("JjWorkspaces.commit")(
+    function* (input) {
+      const operation = "JjWorkspaces.commit";
+      const { cwd, branch } = input;
+      const body = input.body.trim();
+      // Status paths are repository-relative; root-file: matches exactly one of them.
+      const filesets = (input.filePaths ?? []).map((file) => `root-file:${JSON.stringify(file)}`);
+      yield* jj.run({
+        operation,
+        cwd,
+        args: [
+          "commit",
+          "--message",
+          body.length > 0 ? `${input.subject}\n\n${body}` : input.subject,
+          ...(filesets.length > 0 ? ["--", ...filesets] : []),
+        ],
+        workingCopy: "snapshot",
+      });
+      if (branch !== null) {
+        yield* jj.run({
+          operation,
+          cwd,
+          args: ["bookmark", "set", "--revision", "@-", "--", branch],
+          workingCopy: "snapshot",
+        });
+        yield* ensureBranchAttached({ cwd, branch });
+      }
+      const commitSha = (yield* jj.run({
+        operation,
+        cwd,
+        args: ["log", "--no-graph", "--revisions", "@-", "--template", "self.commit_id()"],
+        workingCopy: "observe",
+      })).stdout.trim();
+      return { commitSha };
+    },
+  );
+
   return JjWorkspaces.of({
     repoRoot,
     create,
@@ -515,6 +560,7 @@ const make = Effect.gen(function* () {
     forget,
     ensureBranchAttached,
     importGitRefs,
+    commit,
   });
 });
 
