@@ -29,6 +29,7 @@ export type SettingsPath =
   | "/settings/browser"
   | "/settings/devices"
   | "/settings/scheduled-tasks"
+  | "/settings/memory"
   | "/settings/source-control"
   | "/settings/worktrees"
   | "/settings/connections"
@@ -97,6 +98,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
   "/settings/scheduled-tasks": "Scheduled tasks",
+  "/settings/memory": "Memory",
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
   "/settings/connections": "Environments",
@@ -131,6 +133,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/browser",
       "/settings/devices",
       "/settings/scheduled-tasks",
+      "/settings/memory",
     ],
   },
   {
@@ -424,6 +427,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",
     searchTerms: ["beta folders project tree legacy old classic sidebar"],
+  },
+  {
+    id: "memory",
+    title: "Agents use memory",
+    to: "/settings/memory",
+    scope: "environment",
+    searchTerms: ["memory remember notes optmem wake recall prune purge forget agents"],
   },
   {
     id: "guest-links",
@@ -1149,6 +1159,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/connections": "connections",
   "/settings/access": "connections",
   "/settings/scheduled-tasks": null,
+  "/settings/memory": "environment",
   "/settings/maintenance": null,
   "/settings/labs": null,
   "/settings/about": null,

@@ -1074,6 +1074,10 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:usage-prices:${environmentId}`)),
   );
+  // Bumped after a memory edit so every open memory view reads again.
+  const memoryRevisionAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(0).pipe(Atom.withLabel(`environment-data:server:memory-revision:${environmentId}`)),
+  );
   const usageScanSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
@@ -1262,6 +1266,22 @@ export function createServerEnvironmentAtoms<R, E>(
     scheduledTaskWebhookDelivery: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-delivery",
       tag: WS_METHODS.scheduledTasksGetWebhookDelivery,
+    }),
+    memoryRevision: memoryRevisionAtom,
+    memoryOverview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:memory:overview",
+      tag: WS_METHODS.memoryOverview,
+      refreshTrigger: ({ environmentId }) => memoryRevisionAtom(environmentId),
+    }),
+    memoryList: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:memory:list",
+      tag: WS_METHODS.memoryList,
+      refreshTrigger: ({ environmentId }) => memoryRevisionAtom(environmentId),
+    }),
+    memoryChildren: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:memory:children",
+      tag: WS_METHODS.memoryChildren,
+      refreshTrigger: ({ environmentId }) => memoryRevisionAtom(environmentId),
     }),
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",
@@ -1498,6 +1518,18 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.scheduledTasksDelete,
       scheduler: configScheduler,
       concurrency: configConcurrency,
+    }),
+    pruneMemories: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory:prune",
+      tag: WS_METHODS.memoryPrune,
+    }),
+    forgetMemorySummary: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory:forget",
+      tag: WS_METHODS.memoryForget,
+    }),
+    purgeMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory:purge",
+      tag: WS_METHODS.memoryPurge,
     }),
     // Deliberately not on the config lane: run-now blocks until the run is
     // dispatched, and a slow run must not stall settings/keybinding/provider
