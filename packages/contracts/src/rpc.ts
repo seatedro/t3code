@@ -396,6 +396,18 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  MemoryBlock,
+  MemoryChildrenResult,
+  MemoryEditResult,
+  MemoryError,
+  MemoryListInput,
+  MemoryListResult,
+  MemoryOverview,
+  MemoryOverviewInput,
+  MemoryPruneInput,
+  MemoryPurgeResult,
+} from "./memory.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -538,6 +550,13 @@ export const WS_METHODS = {
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  memoryOverview: "memory.overview",
+  memoryList: "memory.list",
+  memoryChildren: "memory.children",
+  memoryPrune: "memory.prune",
+  memoryForget: "memory.forget",
+  memoryPurge: "memory.purge",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -1932,6 +1951,44 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const MemoryRpcError = Schema.Union([MemoryError, EnvironmentAuthorizationError]);
+
+const WsMemoryOverviewRpc = Rpc.make(WS_METHODS.memoryOverview, {
+  payload: MemoryOverviewInput,
+  success: MemoryOverview,
+  error: MemoryRpcError,
+});
+
+const WsMemoryListRpc = Rpc.make(WS_METHODS.memoryList, {
+  payload: MemoryListInput,
+  success: MemoryListResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryChildrenRpc = Rpc.make(WS_METHODS.memoryChildren, {
+  payload: MemoryBlock,
+  success: MemoryChildrenResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryPruneRpc = Rpc.make(WS_METHODS.memoryPrune, {
+  payload: MemoryPruneInput,
+  success: MemoryEditResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryForgetRpc = Rpc.make(WS_METHODS.memoryForget, {
+  payload: MemoryBlock,
+  success: MemoryEditResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryPurgeRpc = Rpc.make(WS_METHODS.memoryPurge, {
+  payload: MemoryOverviewInput,
+  success: MemoryPurgeResult,
+  error: MemoryRpcError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
@@ -1997,6 +2054,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
+  WsMemoryOverviewRpc,
+  WsMemoryListRpc,
+  WsMemoryChildrenRpc,
+  WsMemoryPruneRpc,
+  WsMemoryForgetRpc,
+  WsMemoryPurgeRpc,
   WsServerReportClientActivityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
