@@ -57,6 +57,7 @@ export type T3McpToolSummaryAction =
   | "environment-update"
   | "theme-read"
   | "theme-set"
+  | "memory"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -359,6 +360,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   t3_theme_read: tool(["Read", "Reading", "Read", "themes"], "theme-read"),
   t3_theme_set: tool(["Set", "Setting", "Set", "the theme"], "theme-set"),
+  memory: tool(["Use", "Using", "Used", "memory"], "memory"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),

@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
+import { hasPendingForkMigrations, runForkMigrations } from "./ForkMigrations.ts";
 import { hasPendingMigrations, runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
@@ -50,10 +51,16 @@ const damagedDatabaseError = (dbPath: string, cause: SqlError.SqlError) =>
     }),
   });
 
+const runAllMigrations = Effect.fn("SqlitePersistence.runAllMigrations")(function* () {
+  yield* runMigrations();
+  yield* runForkMigrations();
+});
+
 // CLI commands open the server's database from another process; migrating behind its owner changes the schema it runs on.
 const runMigrationsAsOwner = Effect.fn("SqlitePersistence.runMigrationsAsOwner")(function* () {
-  // With nothing pending, runMigrations only validates the recorded history and writes nothing.
-  if (!(yield* hasPendingMigrations())) return yield* runMigrations();
+  // With nothing pending, migrating only validates the recorded history and writes nothing.
+  if (!(yield* hasPendingMigrations()) && !(yield* hasPendingForkMigrations()))
+    return yield* runAllMigrations();
   const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
   yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath).pipe(
     Effect.catchTags({
@@ -61,7 +68,7 @@ const runMigrationsAsOwner = Effect.fn("SqlitePersistence.runMigrationsAsOwner")
         Effect.fail(new ServerOwnsDatabaseError({ stateDir })),
     }),
   );
-  yield* runMigrations();
+  yield* runAllMigrations();
 }, Effect.scoped);
 
 const makeLayerSetup = <E, R>(migrate: Effect.Effect<unknown, E, R>) =>
@@ -98,7 +105,7 @@ const makeLayerSetup = <E, R>(migrate: Effect.Effect<unknown, E, R>) =>
     }).pipe(Effect.withSpan("Sqlite.setup")),
   );
 
-const layerSetup = makeLayerSetup(runMigrations());
+const layerSetup = makeLayerSetup(runAllMigrations());
 
 const makeLayerFromPath = <E, R>(makeSetup: (dbPath: string) => Layer.Layer<never, E, R>) =>
   Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
