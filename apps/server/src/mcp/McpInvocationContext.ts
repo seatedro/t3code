@@ -47,6 +47,8 @@ export interface McpInvocationScope {
   readonly requestNamespace: string;
   readonly thread: McpThreadCaller | undefined;
   readonly client: McpClientCaller | undefined;
+  /** Fork: this environment's `memoryEnabled` setting when the request arrived. */
+  readonly memoryEnabled?: boolean;
 }
 
 export class McpInvocationContext extends Context.Service<
@@ -62,6 +64,13 @@ export const hiddenFromSubagents = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.thread?.subagent !== true;
+};
+
+/** `McpSchema.EnabledWhen` for the memory tool: on in settings, and never for a delegated child. */
+export const memoryToolVisible = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.memoryEnabled === true && scope.thread?.subagent !== true;
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"
