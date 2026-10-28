@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  hasT3Memory,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
@@ -81,5 +82,48 @@ describe("T3 device instructions", () => {
       "Again.",
     );
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
+  });
+});
+
+const memoryLine = "call it with `wake` before any other tool";
+
+describe("memory instructions", () => {
+  it("follow the credential's memory capability", () => {
+    assert.isTrue(hasT3Memory({ capabilities: new Set(["orchestration", "memory"]) }));
+    assert.isFalse(hasT3Memory({ capabilities: new Set(["orchestration"]) }));
+    assert.isFalse(hasT3Memory(undefined));
+  });
+
+  it("join the system prompt and first-run prompt only when memory is on", () => {
+    assert.include(t3OrchestrationSystemPrompt(true, false, true), memoryLine);
+    assert.notInclude(t3OrchestrationSystemPrompt(true, false, false), memoryLine);
+    assert.isUndefined(t3OrchestrationSystemPrompt(false, false, true));
+    const firstRun = (memory: boolean) =>
+      t3OrchestrationPrompt({
+        prompt: "hi",
+        hasT3Mcp: true,
+        hasDeviceTools: false,
+        memory,
+        orchestrationDelivered: false,
+        deviceInstructionsDelivered: false,
+      });
+    assert.include(firstRun(true), memoryLine);
+    assert.notInclude(firstRun(false), memoryLine);
+  });
+
+  it("are sent again to an ACP agent when memory is switched on", () => {
+    const off = {
+      interactionMode: "default",
+      hasT3Mcp: true,
+      hasDeviceTools: false,
+      memory: false,
+    } as const;
+    const on = { ...off, memory: true };
+
+    assert.equal(t3AcpPromptWithInstructions({ prompt: "hi", state: off, previousState: off }), "hi");
+    assert.include(
+      t3AcpPromptWithInstructions({ prompt: "hi", state: on, previousState: off }),
+      memoryLine,
+    );
   });
 });
