@@ -7,9 +7,17 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
-import type { VcsDriverKind, VcsError, VcsRepositoryIdentity } from "@t3tools/contracts";
+import type {
+  VcsDriverKind,
+  VcsError,
+  VcsRepositoryIdentity,
+  VcsWorkspaceProblem,
+} from "@t3tools/contracts";
 import { VcsUnsupportedOperationError } from "@t3tools/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import * as JjCheckpoints from "./jj/JjCheckpoints.ts";
+import * as JjCli from "./jj/JjCli.ts";
+import * as JjVcsDriver from "./jj/JjVcsDriver.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
@@ -26,6 +34,13 @@ export interface VcsDriverHandle {
   readonly kind: VcsDriverKind;
   readonly repository: VcsRepositoryIdentity;
   readonly driver: VcsDriver.VcsDriver["Service"];
+  /** Set when the repository is recognized but T3 Code cannot drive it (for example, a non-colocated jj repo). */
+  readonly problem?: VcsWorkspaceProblem;
+}
+
+interface DetectionDiskState {
+  readonly markerEntries: ReadonlyArray<boolean>;
+  readonly jjVersion: string | null;
 }
 
 export class VcsDriverRegistry extends Context.Service<
@@ -68,8 +83,21 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
+  const jjCli = yield* JjCli.make;
+  const jjShape = yield* JjVcsDriver.makeVcsDriverShape(git).pipe(
+    Effect.provideService(JjCli.JjCli, jjCli),
+  );
+  const jjCheckpoints = git.checkpoints
+    ? yield* JjCheckpoints.make({ execute: git.execute, checkpoints: git.checkpoints }).pipe(
+        Effect.provideService(JjCli.JjCli, jjCli),
+      )
+    : undefined;
+  const jj = VcsDriver.VcsDriver.of(
+    jjCheckpoints ? { ...jjShape, checkpoints: jjCheckpoints } : jjShape,
+  );
   const drivers: Partial<Record<VcsDriverKind, VcsDriver.VcsDriver["Service"]>> = {
     git,
+    jj,
   };
 
   const get: VcsDriverRegistry["Service"]["get"] = (kind) => {
@@ -95,10 +123,19 @@ export const make = Effect.gen(function* () {
     if (!repository) {
       return null;
     }
+    const problem =
+      kind === "jj"
+        ? yield* JjVcsDriver.inspectSupport(repository.rootPath).pipe(
+            Effect.provideService(JjCli.JjCli, jjCli),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          )
+        : null;
     return {
       kind,
       repository,
       driver,
+      ...(problem ? { problem } : {}),
     } satisfies VcsDriverHandle;
   });
 
@@ -113,7 +150,11 @@ export const make = Effect.gen(function* () {
       return yield* detectWithDriver(requestedKind, driver, input.cwd);
     }
 
-    return yield* detectWithDriver("git", git, input.cwd);
+    // At the same root `.jj` wins; a jj repo never falls back to Git, even when it is unsupported.
+    return (
+      (yield* detectWithDriver("jj", jj, input.cwd)) ??
+      (yield* detectWithDriver("git", git, input.cwd))
+    );
   });
 
   // Symlinks can put cwd outside root; then inspect cwd alone.
@@ -125,22 +166,50 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const readDiskState = (cwd: string, repository: VcsRepositoryIdentity) =>
+  // A changed jj version can change whether a jj repository is supported.
+  const readDiskState = (cwd: string, handle: VcsDriverHandle) =>
     Effect.all({
-      gitEntries: Effect.forEach(foldersBelowRoot(cwd, repository.rootPath), (folder) =>
-        fileSystem.exists(path.join(folder, ".git")),
-      ),
+      markerEntries: Effect.forEach(
+        [
+          ...new Set([
+            ...foldersBelowRoot(cwd, handle.repository.rootPath),
+            handle.repository.rootPath,
+          ]),
+        ],
+        (folder) =>
+          Effect.all([
+            fileSystem.exists(path.join(folder, ".git")),
+            fileSystem.exists(path.join(folder, ".jj")),
+          ]),
+      ).pipe(Effect.map((entries) => entries.flat())),
       repositoryOnDisk: Effect.forEach(
-        repository.metadataPath === null
+        handle.repository.metadataPath === null
           ? [cwd]
-          : [cwd, path.resolve(cwd, repository.metadataPath)],
+          : [cwd, path.resolve(cwd, handle.repository.metadataPath)],
         (target) => fileSystem.exists(target),
       ).pipe(Effect.map((results) => results.every(Boolean))),
+      jjVersion:
+        handle.kind === "jj"
+          ? jjCli.version.pipe(
+              Effect.map((version) => version.raw),
+              Effect.orElseSucceed(() => null),
+            )
+          : Effect.succeed(null),
     }).pipe(Effect.orElseSucceed(() => null));
+
+  const sameDiskState = (
+    cached: DetectionDiskState,
+    disk: (DetectionDiskState & { readonly repositoryOnDisk: boolean }) | null,
+  ) =>
+    disk !== null &&
+    disk.repositoryOnDisk &&
+    disk.jjVersion === cached.jjVersion &&
+    disk.markerEntries.length === cached.markerEntries.length &&
+    disk.markerEntries.every((exists, index) => exists === cached.markerEntries[index]);
 
   const detectionCache = yield* Cache.makeWith<
     string,
-    { readonly handle: VcsDriverHandle; readonly gitEntries: ReadonlyArray<boolean> } | null,
+    (DetectionDiskState & { readonly handle: VcsDriverHandle }) | null,
     VcsError
   >(
     (key) =>
@@ -148,13 +217,20 @@ export const make = Effect.gen(function* () {
         const input = parseDetectionCacheKey(key);
         const handle = yield* detectResolvedKind(input);
         if (handle === null) return null;
-        const disk = yield* readDiskState(input.cwd, handle.repository);
-        return { handle, gitEntries: disk?.gitEntries ?? [] };
+        const disk = yield* readDiskState(input.cwd, handle);
+        return {
+          handle,
+          markerEntries: disk?.markerEntries ?? [],
+          jjVersion: disk?.jjVersion ?? null,
+        };
       }),
     {
       capacity: DETECTION_CACHE_CAPACITY,
       timeToLive: Exit.match({
-        onSuccess: (detected) => (detected === null ? Duration.zero : DETECTION_CACHE_TTL),
+        onSuccess: (detected) =>
+          detected === null || detected.handle.problem?.code === "error"
+            ? Duration.zero
+            : DETECTION_CACHE_TTL,
         onFailure: () => Duration.zero,
       }),
     },
@@ -166,12 +242,7 @@ export const make = Effect.gen(function* () {
       const key = detectionCacheKey({ cwd: input.cwd, requestedKind });
       const cached = yield* Cache.get(detectionCache, key);
       if (cached === null) return null;
-      const disk = yield* readDiskState(input.cwd, cached.handle.repository);
-      if (
-        disk?.repositoryOnDisk &&
-        disk.gitEntries.length === cached.gitEntries.length &&
-        disk.gitEntries.every((exists, index) => exists === cached.gitEntries[index])
-      ) {
+      if (sameDiskState(cached, yield* readDiskState(input.cwd, cached.handle))) {
         return cached.handle;
       }
       yield* Cache.invalidate(detectionCache, key);

@@ -215,6 +215,11 @@ describe("applyGitStatusStreamEvent", () => {
         insertions: 1,
         deletions: 0,
       },
+      vcs: {
+        kind: "jj",
+        workspaceName: "t3-demo",
+        problem: { code: "stale", message: "The working copy is stale" },
+      },
       hasUpstream: false,
       aheadCount: 0,
       behindCount: 0,

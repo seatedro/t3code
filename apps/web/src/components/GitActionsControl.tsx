@@ -121,6 +121,13 @@ import {
 import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControlPresentation";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import {
+  vcsProblemBlockingReason,
+  vcsProblemDescription,
+  vcsTerminologyFor,
+} from "@t3tools/client-runtime/state/vcs";
+import { RepairWorkspaceButton } from "./RepairWorkspaceButton";
+import { VcsProblemIndicator } from "./VcsProblemIndicator";
 import { useOpenLink } from "~/browser/useOpenLink";
 
 interface GitActionsControlProps {
@@ -238,6 +245,8 @@ function getMenuActionDisabledReason({
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
   if (!gitStatus) return "Git status is unavailable.";
+  const blockedReason = vcsProblemBlockingReason(gitStatus);
+  if (blockedReason !== null) return blockedReason;
 
   const hasBranch = gitStatus.refName !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
@@ -1082,6 +1091,8 @@ export default function GitActionsControl({
   const sourceControlPresentation = getSourceControlPresentation(gitStatus?.sourceControlProvider);
   const changeRequestTerminology = sourceControlPresentation.terminology;
   const SourceControlIcon = sourceControlPresentation.Icon;
+  const vcsTerminology = vcsTerminologyFor(gitStatus?.vcs?.kind);
+  const vcsProblem = gitStatus?.vcs?.problem ?? null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
@@ -1593,10 +1604,20 @@ export default function GitActionsControl({
           <MenuItemLabel>Publish repository...</MenuItemLabel>
         </MenuItem>
       ) : null}
+      {vcsProblem ? (
+        <p
+          className={cn(
+            "max-w-64 px-2 py-1.5 text-xs",
+            vcsProblem.code === "stale" ? "text-warning" : "text-destructive",
+          )}
+        >
+          {vcsProblemDescription(vcsProblem)}
+        </p>
+      ) : null}
       {gitStatusForActions?.refName === null && (
         <p className="px-2 py-1.5 text-xs text-warning">
-          Detached HEAD: create and check out a branch to enable push and{" "}
-          {changeRequestTerminology.singular} actions.
+          Detached HEAD: create and check out a {vcsTerminology.ref.toLowerCase()} to enable push
+          and {changeRequestTerminology.singular} actions.
         </p>
       )}
       {gitStatusForActions &&
@@ -1614,6 +1635,19 @@ export default function GitActionsControl({
 
   return (
     <>
+      {presentation !== "menu" && isRepo && vcsProblem ? (
+        <div className={cn("flex min-w-0 items-center", isPanel && "h-8 px-2.5")}>
+          <VcsProblemIndicator
+            problem={vcsProblem}
+            terminology={vcsTerminology}
+            action={
+              vcsProblem.code === "stale" && activeEnvironmentId !== null ? (
+                <RepairWorkspaceButton environmentId={activeEnvironmentId} cwd={gitCwd} />
+              ) : undefined
+            }
+          />
+        </div>
+      ) : null}
       {presentation === "menu" ? (
         !isRepo ? (
           <MenuItem
@@ -1862,12 +1896,16 @@ export default function GitActionsControl({
           <DialogPanel>
             <div className="space-y-3 rounded-xl bg-zinc-25 p-3 text-sm ring-1 ring-black/5 dark:bg-white/[0.035] dark:ring-white/5">
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-                <span className="text-muted-foreground">Branch</span>
+                <span className="text-muted-foreground">{vcsTerminology.ref}</span>
                 <span className="flex items-center justify-between gap-2">
                   <span className="font-medium">
                     {gitStatusForActions?.refName ?? "(detached HEAD)"}
                   </span>
-                  {isDefaultRef && <span className="text-right text-warning">Default branch</span>}
+                  {isDefaultRef && (
+                    <span className="text-right text-warning">
+                      Default {vcsTerminology.ref.toLowerCase()}
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="space-y-1">

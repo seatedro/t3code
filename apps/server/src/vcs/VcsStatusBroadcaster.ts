@@ -407,10 +407,11 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // Only foreground refreshes may snapshot a jj working copy; the remote poller must not.
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
-    function* (cwd: string) {
+    function* (cwd: string, snapshotWorkingCopy: boolean) {
       yield* workflow.invalidateLocalStatus(cwd);
-      const local = yield* workflow.localStatus({ cwd });
+      const local = yield* workflow.localStatus({ cwd }, { snapshotWorkingCopy });
       return yield* updateCachedLocalStatus(cwd, local, { publish: true });
     },
   );
@@ -419,7 +420,7 @@ export const make = Effect.gen(function* () {
     "VcsStatusBroadcaster.refreshLocalStatus",
   )(function* (rawCwd) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    return yield* refreshLocalStatusCore(cwd);
+    return yield* refreshLocalStatusCore(cwd, true);
   });
 
   const maybeAutoPull = Effect.fn("VcsStatusBroadcaster.maybeAutoPull")(function* (
@@ -500,7 +501,7 @@ export const make = Effect.gen(function* () {
             previousRemote.behindCount !== remote.behindCount ||
             previousRemote.aheadOfDefaultCount !== remote.aheadOfDefaultCount)
         ) {
-          yield* refreshLocalStatusCore(cwd);
+          yield* refreshLocalStatusCore(cwd, false);
         }
         return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
       }),
@@ -516,7 +517,7 @@ export const make = Effect.gen(function* () {
         cwd,
         Effect.gen(function* () {
           yield* workflow.invalidateLocalStatus(cwd);
-          const local = yield* workflow.localStatus({ cwd });
+          const local = yield* workflow.localStatus({ cwd }, { snapshotWorkingCopy: true });
           const previous = yield* getCachedStatus(cwd);
           if (previous?.local?.value.refName !== local.refName) {
             yield* workflow.invalidateRemoteStatus(cwd);
@@ -535,7 +536,7 @@ export const make = Effect.gen(function* () {
         yield* workflow.invalidateStatus(cwd);
         // Local after remote: the fetch can move the base that the Changes totals compare with.
         const remote = yield* workflow.remoteStatus({ cwd }, { refreshUpstream });
-        const local = yield* workflow.localStatus({ cwd });
+        const local = yield* workflow.localStatus({ cwd }, { snapshotWorkingCopy: true });
         // Without a fetch, the cached behind count cannot justify an automatic pull.
         const pulled = refreshUpstream ? yield* maybeAutoPull(cwd, remote, [rawCwd]) : null;
         if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);

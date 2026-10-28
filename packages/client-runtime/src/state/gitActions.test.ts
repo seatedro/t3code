@@ -94,3 +94,41 @@ describe("git action copy", () => {
     ).toBe("Commit, push & create MR");
   });
 });
+
+describe("a repository with a vcs problem", () => {
+  const actionable = { hasWorkingTreeChanges: true, aheadCount: 2, behindCount: 1 } as const;
+
+  it("disables commit, push, pull, and change requests with the problem as the reason", () => {
+    const blocked = status({
+      ...actionable,
+      vcs: {
+        kind: "jj",
+        problem: { code: "unsupported", message: "Repository is not colocated." },
+      },
+    });
+    const items = buildMenuItems(blocked, false);
+    expect(items.map((item) => item.disabled)).toEqual([true, true, true]);
+    for (const item of items) {
+      expect(
+        getGitActionDisabledReason({
+          item,
+          gitStatus: blocked,
+          isBusy: false,
+          hasOriginRemote: true,
+        }),
+      ).toBe("Repository is not colocated.");
+    }
+    expect(resolveQuickAction(status({ ...blocked, hasWorkingTreeChanges: false }), false)).toEqual(
+      expect.objectContaining({ disabled: true, hint: "Repository is not colocated." }),
+    );
+  });
+
+  it("leaves actions available when only the workspace is stale", () => {
+    const stale = status({
+      hasWorkingTreeChanges: true,
+      vcs: { kind: "jj", problem: { code: "stale", message: "Workspace is stale." } },
+    });
+    expect(buildMenuItems(stale, false)[0]?.disabled).toBe(false);
+    expect(resolveQuickAction(stale, false).disabled).toBe(false);
+  });
+});

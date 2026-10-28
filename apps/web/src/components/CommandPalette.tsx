@@ -1472,6 +1472,7 @@ function OpenCommandPaletteDialog(props: {
         "review",
         "merge",
         "branch",
+        "bookmark",
       ],
       title: "Open pull requests",
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,

@@ -6,6 +6,8 @@ import {
   buildMenuItems,
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
+  vcsProblemBlockingReason,
+  vcsTerminologyFor,
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -45,6 +47,8 @@ import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-wo
 import { vcsEnvironment } from "../../../state/vcs";
 import { resolveGitOverviewReviewNavigationAction } from "./git-overview-navigation";
 import { menuItemIconName, statusSummary } from "./gitSheetComponents";
+import { RepairWorkspaceButton } from "./RepairWorkspaceButton";
+import { VcsProblemRow } from "./VcsProblemRow";
 import {
   LinkedPullRequestRow,
   linkedPullRequestKey,
@@ -116,6 +120,12 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
 
+  const vcsTerminology = vcsTerminologyFor(gitStatus.data?.vcs?.kind);
+  const vcsProblem = gitStatus.data?.vcs?.problem ?? null;
+  const vcsBlockedReason = vcsProblemBlockingReason(gitStatus.data);
+  const refNoun = vcsTerminology.ref.toLowerCase();
+  const workspaceNoun = vcsTerminology.workspace.toLowerCase();
+
   const menuItems = isRepo ? buildMenuItems(gitStatus.data, busy, hasPrimaryRemote) : [];
 
   const sheetMenuItems = menuItems.map((item) => ({
@@ -141,7 +151,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   const openExistingPr = async () => {
     const prUrl = gitStatus.data?.pr?.state === "open" ? gitStatus.data.pr.url : null;
     if (!prUrl) {
-      Dialog.alert(`No open ${shortLabel}`, `This branch does not have an open ${singular}.`);
+      Dialog.alert(`No open ${shortLabel}`, `This ${refNoun} does not have an open ${singular}.`);
       return;
     }
     if (!(await openPullRequest(prUrl))) {
@@ -252,6 +262,19 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         ) : undefined
       }
     >
+      {vcsProblem ? (
+        <ListSection>
+          <VcsProblemRow
+            problem={vcsProblem}
+            terminology={vcsTerminology}
+            action={
+              vcsProblem.code === "stale" && selectedThreadCwd ? (
+                <RepairWorkspaceButton environmentId={environmentId} cwd={selectedThreadCwd} />
+              ) : undefined
+            }
+          />
+        </ListSection>
+      ) : null}
       <ListSection>
         {sheetMenuItems.map(({ item, disabledReason }) => (
           <ListRow
@@ -268,11 +291,12 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
             icon="arrow.down.circle"
             label="Pull latest"
             description={
-              canWriteSourceControl
-                ? `${behindCount} commit${behindCount === 1 ? "" : "s"} behind upstream`
-                : "This connection cannot change source control."
+              !canWriteSourceControl
+                ? "This connection cannot change source control."
+                : (vcsBlockedReason ??
+                  `${behindCount} commit${behindCount === 1 ? "" : "s"} behind upstream`)
             }
-            disabled={!canWriteSourceControl || busy || !isRepo}
+            disabled={!canWriteSourceControl || busy || !isRepo || vcsBlockedReason !== null}
             onPress={() => void gitActions.onPullSelectedThreadBranch()}
           />
         ) : null}
@@ -292,11 +316,11 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         />
         <ListRow
           icon="point.topleft.down.curvedto.point.bottomright.up"
-          label="Branches & worktrees"
+          label={`${vcsTerminology.refs} & ${vcsTerminology.workspaces.toLowerCase()}`}
           description={
             canChangeThreadBranch
-              ? "Switch branch, create branch, or move to a worktree"
-              : "View branches and worktrees"
+              ? `Switch ${refNoun}, create ${refNoun}, or move to a ${workspaceNoun}`
+              : `View ${vcsTerminology.refs.toLowerCase()} and ${vcsTerminology.workspaces.toLowerCase()}`
           }
           disabled={busy || !isRepo}
           onPress={() =>
@@ -332,7 +356,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       ) : null}
 
       {currentWorktreePath ? (
-        <ListSection title="Worktree">
+        <ListSection title={vcsTerminology.workspace}>
           <Text selectable textRole="footnote" className="p-4 text-foreground-muted">
             {currentWorktreePath}
           </Text>

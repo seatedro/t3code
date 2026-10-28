@@ -4,6 +4,7 @@ import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePull
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
 import { useRightPanelStore } from "../rightPanelStore";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -226,6 +227,8 @@ export function BranchToolbarBranchSelector({
           input: { cwd: branchCwd },
         }),
   );
+  const terminology = vcsTerminologyFor(branchStatusQuery.data?.vcs?.kind);
+  const refNoun = terminology.ref.toLowerCase();
   const branchRefState = usePaginatedBranches({
     environmentId,
     cwd: branchCwd,
@@ -324,12 +327,12 @@ export function BranchToolbarBranchSelector({
         : null;
 
   const copyBranchName = (branchName: string) => {
-    void writeTextToClipboard(branchName, "branch name").then(
+    void writeTextToClipboard(branchName, `${refNoun} name`).then(
       (didCopy) => {
         if (!didCopy) return;
         toastManager.add({
           type: "success",
-          title: "Branch name copied",
+          title: `${terminology.ref} name copied`,
           description: branchName,
         });
       },
@@ -337,7 +340,7 @@ export function BranchToolbarBranchSelector({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to copy branch name",
+            title: `Failed to copy ${refNoun} name`,
             description: toBranchActionErrorMessage(error),
           }),
         );
@@ -352,7 +355,7 @@ export function BranchToolbarBranchSelector({
     event.preventDefault();
     event.stopPropagation();
     const items: ContextMenuItem<"copy-branch-name">[] = [
-      { id: "copy-branch-name", label: "Copy branch name", icon: "copy" },
+      { id: "copy-branch-name", label: `Copy ${refNoun} name`, icon: "copy" },
     ];
     void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
       if (action === "copy-branch-name") copyBranchName(branchName);
@@ -368,7 +371,7 @@ export function BranchToolbarBranchSelector({
         stackedThreadToast({
           type: "error",
           title: "Action unavailable",
-          description: "This connection cannot change the thread's branch.",
+          description: `This connection cannot change the thread's ${refNoun}.`,
         }),
       );
       return;

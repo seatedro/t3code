@@ -180,6 +180,16 @@ const canRetryFullFsync = (stderr: string) =>
   /fsync error on [^\r\n]+: operation not supported\r?$/im.test(stderr) ||
   /cannot update ref [^\r\n]+: couldn't write '[^\r\n]+\.lock'\r?$/im.test(stderr);
 
+/** Bounded retry for exits classified as transient, such as a held index lock. */
+export const retryTransientExit = <A, R>(effect: Effect.Effect<A, VcsError, R>) =>
+  effect.pipe(
+    Effect.retry({
+      times: 2,
+      while: (error) => error._tag === "VcsProcessExitError" && error.retryable === true,
+      schedule: Schedule.spaced(Duration.millis(75)),
+    }),
+  );
+
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const hostPlatform = yield* HostProcess.Platform;
@@ -359,11 +369,7 @@ export const make = Effect.gen(function* () {
             errorTag: error._tag,
           }),
         ),
-        Effect.retry({
-          times: 2,
-          while: (error) => error._tag === "VcsProcessExitError" && error.retryable === true,
-          schedule: Schedule.spaced(Duration.millis(75)),
-        }),
+        retryTransientExit,
       );
     }
     return yield* input.concurrency === undefined

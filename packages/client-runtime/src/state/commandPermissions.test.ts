@@ -251,6 +251,31 @@ it.effect(
     ),
 );
 
+it.effect("guards workspace repair on the destination's source control grant", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      registry.mount(sessions(other));
+      const repair = createCommandPermissions(runtime, WS_METHODS.vcsRepairWorkspace);
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(repair.permissionAtom(env))).toBe(false);
+      expect((yield* repair.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+        AuthSourceControlWriteScope,
+      );
+      const sourceControl = {
+        ...grant(false),
+        scopes: [AuthSourceControlWriteScope],
+        permissions: [AuthSourceControlWriteScope],
+      };
+      registry.set(sessions(env), AsyncResult.success(sourceControl));
+      registry.set(sessions(other), AsyncResult.success(grant(true)));
+      expect(registry.get(repair.permissionAtom(env))).toBe(true);
+      expect(registry.get(repair.permissionAtom(other))).toBe(false);
+      yield* repair.authorize(registry, env);
+    }),
+  ),
+);
+
 it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(
   "%s needs thread read permission only when generating a PR from a thread",
   (action) =>

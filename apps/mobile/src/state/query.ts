@@ -41,3 +41,11 @@ export function useEnvironmentQuery<A, E>(
     refresh,
   };
 }
+
+/** Keep select outside the component; a new function rebuilds the derived atom on every render. */
+export function useEnvironmentQuerySelector<A, E, B>(
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, E>> | null,
+  select: (result: AsyncResult.AsyncResult<A, E>) => B,
+): B {
+  return useAtomValue(atom ?? EMPTY_ASYNC_RESULT_ATOM, select);
+}

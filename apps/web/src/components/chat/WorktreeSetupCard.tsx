@@ -4,6 +4,7 @@ import {
   type WorktreeSetupStage,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import type { VcsTerminology } from "@t3tools/client-runtime/state/vcs";
 import {
   CheckIcon,
   CircleAlertIcon,
@@ -27,6 +28,7 @@ import { WorkLogRow } from "./WorkLog";
 
 interface WorktreeSetupCardProps {
   snapshot: WorktreeSetupSnapshot;
+  terminology: VcsTerminology;
   onCancel: (() => void) | null;
   onWorkLocally: (() => void) | null;
   onOpenTerminal: (() => void) | null;
@@ -109,27 +111,34 @@ function ShimmerOverlay({ children }: { children: ReactNode }) {
   );
 }
 
-function headerLabel(snapshot: WorktreeSetupSnapshot): string {
+function headerLabel(snapshot: WorktreeSetupSnapshot, terminology: VcsTerminology): string {
+  const noun = terminology.workspace;
   switch (snapshot.phase) {
     case "running":
-      return "Setting up worktree…";
+      return `Setting up ${noun.toLowerCase()}…`;
     case "done":
       return snapshot.stages.some((stage) => stage.status === "failed")
-        ? "Worktree ready, setup script failed"
-        : "Worktree ready";
+        ? `${noun} ready, setup script failed`
+        : `${noun} ready`;
     case "failed":
-      return "Worktree setup failed";
+      return `${noun} setup failed`;
     case "cancelled":
-      return "Worktree setup cancelled";
+      return `${noun} setup cancelled`;
   }
 }
 
-function SetupHeaderRow({ snapshot }: { snapshot: WorktreeSetupSnapshot }) {
+function SetupHeaderRow({
+  snapshot,
+  terminology,
+}: {
+  snapshot: WorktreeSetupSnapshot;
+  terminology: VcsTerminology;
+}) {
   const running = snapshot.phase === "running";
   const failed = snapshot.phase === "failed";
   const finishedWithFailedStage =
     snapshot.phase === "done" && snapshot.stages.some((stage) => stage.status === "failed");
-  const text = headerLabel(snapshot);
+  const text = headerLabel(snapshot, terminology);
   const tone = failed
     ? "text-destructive-foreground"
     : finishedWithFailedStage
@@ -284,14 +293,20 @@ function SetupDetails({ snapshot }: { snapshot: WorktreeSetupSnapshot }) {
   );
 }
 
-function CollapsedSummaryRow({ snapshot }: { snapshot: WorktreeSetupSnapshot }) {
+function CollapsedSummaryRow({
+  snapshot,
+  terminology,
+}: {
+  snapshot: WorktreeSetupSnapshot;
+  terminology: VcsTerminology;
+}) {
   const status: WorktreeSetupStage["status"] =
     snapshot.phase === "failed" || snapshot.phase === "cancelled"
       ? "failed"
       : snapshot.stages.some((stage) => stage.id === "setup-script" && stage.status === "failed")
         ? "failed"
         : "done";
-  const label = headerLabel(snapshot);
+  const label = headerLabel(snapshot, terminology);
   return (
     <WorkLogRow
       data-worktree-setup-stage="summary"
@@ -313,6 +328,7 @@ function CollapsedSummaryRow({ snapshot }: { snapshot: WorktreeSetupSnapshot }) 
 
 export function WorktreeSetupCard({
   snapshot,
+  terminology,
   onCancel,
   onWorkLocally,
   onOpenTerminal,
@@ -333,9 +349,9 @@ export function WorktreeSetupCard({
 
   return (
     <section aria-label="Worktree setup" data-worktree-setup-phase={snapshot.phase}>
-      {showHeader ? <SetupHeaderRow snapshot={snapshot} /> : null}
+      {showHeader ? <SetupHeaderRow snapshot={snapshot} terminology={terminology} /> : null}
       {collapsed ? (
-        <CollapsedSummaryRow snapshot={snapshot} />
+        <CollapsedSummaryRow snapshot={snapshot} terminology={terminology} />
       ) : (
         <div className={showHeader ? "pt-1.5" : undefined}>
           {snapshot.stages.map((stage) => (

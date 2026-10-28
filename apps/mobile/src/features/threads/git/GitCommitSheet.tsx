@@ -4,6 +4,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { useState } from "react";
 import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { vcsProblemBlockingReason, vcsTerminologyFor } from "@t3tools/client-runtime/state/vcs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../../components/ui/AppSymbol";
@@ -42,6 +43,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   );
 
   const busy = gitState.gitOperationLabel !== null;
+  const blocked = vcsProblemBlockingReason(gitStatus.data) !== null;
+  const refNoun = vcsTerminologyFor(gitStatus.data?.vcs?.kind).ref.toLowerCase();
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const allFiles = gitStatus.data?.workingTree?.files ?? [];
 
@@ -210,15 +213,17 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
             icon="checkmark"
             tone="primary"
             fullWidth
-            disabled={!canWriteSourceControl || noneSelected || busy}
+            disabled={!canWriteSourceControl || noneSelected || busy || blocked}
             onPress={() => void runCommitAction(false)}
           />
           <Button
-            label="Commit on a new branch"
+            label={`Commit on a new ${refNoun}`}
             icon="arrow.branch"
             tone="text"
             fullWidth
-            disabled={!canWriteSourceControl || !canChangeThreadBranch || noneSelected || busy}
+            disabled={
+              !canWriteSourceControl || !canChangeThreadBranch || noneSelected || busy || blocked
+            }
             onPress={() => void runCommitAction(true)}
           />
         </View>

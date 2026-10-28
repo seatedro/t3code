@@ -257,8 +257,21 @@ export const layer: Layer.Layer<
     const withWorkspaceLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
       workspaceLocks.withLock(cwd, effect);
 
-    const isGitCheckpointable = (cwd: string) =>
-      checkpointStore.isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+    // A failed check (say, a stale jj workspace) is an error checkpoint, never "no checkpoints".
+    const checkpointSupport = (
+      scope: OrchestrationV2CheckpointScope,
+      checkpointRef: CheckpointRef,
+    ) =>
+      checkpointStore.supportsCheckpoints(scope.cwd).pipe(
+        Effect.map((supported) => (supported ? ("supported" as const) : ("missing" as const))),
+        Effect.catch((cause) =>
+          Effect.logWarning("orchestration V2 checkpoint support check failed", {
+            scopeId: scope.id,
+            checkpointRef,
+            cause: String(cause),
+          }).pipe(Effect.as("error" as const)),
+        ),
+      );
 
     const ensureScope: CheckpointServiceV2Shape["ensureScope"] = (scope) => Effect.succeed(scope);
 
@@ -266,7 +279,7 @@ export const layer: Layer.Layer<
       withWorkspaceLock(
         input.scope.cwd,
         Effect.gen(function* () {
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* checkpointStore.supportsCheckpoints(input.scope.cwd))) {
             return;
           }
 
@@ -317,23 +330,24 @@ export const layer: Layer.Layer<
               scopeId: input.scope.id,
               ordinalWithinScope: input.ordinalWithinScope,
             });
-            const checkpointable = yield* isGitCheckpointable(input.scope.cwd);
-            const available = checkpointable
-              ? yield* checkpointStore
-                  .hasCheckpointRef({
-                    cwd: input.scope.cwd,
-                    checkpointRef,
-                  })
-                  .pipe(
-                    Effect.catch((cause) =>
-                      Effect.logWarning("orchestration V2 baseline ref lookup failed", {
-                        scopeId: input.scope.id,
-                        checkpointRef,
-                        cause: String(cause),
-                      }).pipe(Effect.as(false)),
-                    ),
-                  )
-              : false;
+            const support = yield* checkpointSupport(input.scope, checkpointRef);
+            const available =
+              support === "supported"
+                ? yield* checkpointStore
+                    .hasCheckpointRef({
+                      cwd: input.scope.cwd,
+                      checkpointRef,
+                    })
+                    .pipe(
+                      Effect.catch((cause) =>
+                        Effect.logWarning("orchestration V2 baseline ref lookup failed", {
+                          scopeId: input.scope.id,
+                          checkpointRef,
+                          cause: String(cause),
+                        }).pipe(Effect.as(false)),
+                      ),
+                    )
+                : false;
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,
@@ -343,7 +357,7 @@ export const layer: Layer.Layer<
               ordinalWithinScope: input.ordinalWithinScope,
               appRunOrdinal: null,
               ref: checkpointRef,
-              status: available ? "ready" : "missing",
+              status: available ? "ready" : support === "error" ? "error" : "missing",
               files: [],
               capturedAt: input.scope.createdAt,
             });
@@ -382,7 +396,8 @@ export const layer: Layer.Layer<
             ordinalWithinScope: Math.max(0, input.ordinalWithinScope - 1),
           });
 
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          const support = yield* checkpointSupport(input.scope, checkpointRef);
+          if (support !== "supported") {
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,
@@ -392,7 +407,7 @@ export const layer: Layer.Layer<
               ordinalWithinScope: input.ordinalWithinScope,
               appRunOrdinal: input.appRunOrdinal,
               ref: checkpointRef,
-              status: "missing",
+              status: support,
               files: [],
               capturedAt: input.capturedAt,
             });

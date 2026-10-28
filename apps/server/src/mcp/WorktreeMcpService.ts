@@ -8,6 +8,7 @@ import {
   type WorktreeMcpHandoffResult,
   type WorktreeMcpSetupScriptStatus,
   type WorktreeMcpStatusResult,
+  type VcsRepairWorkspaceResult,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -22,6 +23,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as JjWorkspaceRepair from "../vcs/jj/JjWorkspaceRepair.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
 
 export class WorktreeMcpService extends Context.Service<
@@ -34,6 +36,9 @@ export class WorktreeMcpService extends Context.Service<
     readonly status: (
       scope: McpInvocationScope,
     ) => Effect.Effect<WorktreeMcpStatusResult, WorktreeMcpFailure>;
+    readonly repair: (
+      scope: McpInvocationScope,
+    ) => Effect.Effect<VcsRepairWorkspaceResult, WorktreeMcpFailure>;
   }
 >()("t3/mcp/WorktreeMcpService") {}
 
@@ -62,6 +67,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const jjWorkspaceRepair = yield* JjWorkspaceRepair.JjWorkspaceRepair;
 
   // Serialize handoffs per thread to avoid creating two worktrees and orphaning one.
   const handoffThreadsInFlight = new Set<string>();
@@ -249,14 +255,16 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as({ status: "failed", detail } as const));
           });
 
+        // A jj workspace may hold work jj already recorded; roll back only an untouched one.
+        const force = localStatus.vcs?.kind !== "jj";
         const removeCreatedWorktree = Effect.suspend(() =>
-          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
+          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force }).pipe(
             Effect.andThen(
               Effect.suspend(() =>
                 gitWorkflow.deleteLocalBranch({
                   cwd: projectCwd,
                   refName: worktree.worktree.refName,
-                  force: true,
+                  force,
                 }),
               ),
             ),
@@ -426,7 +434,34 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return WorktreeMcpService.of({ handoff, status });
+  const repair: WorktreeMcpService["Service"]["repair"] = Effect.fn("WorktreeMcpService.repair")(
+    function* (callerScope) {
+      yield* requireCapability(callerScope);
+      const scope = yield* requireThreadScope(callerScope);
+      const projection = yield* loadThread(scope);
+      const cwd =
+        projection.thread.worktreePath ??
+        (yield* loadProject(scope, projection.thread.projectId)).workspaceRoot;
+      const result = yield* jjWorkspaceRepair
+        .repair({ cwd })
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              error._tag === "VcsUnsupportedOperationError"
+                ? "invalid_request"
+                : "operation_failed",
+              `Unable to repair the workspace: ${error.message}`,
+            ),
+          ),
+        );
+      yield* vcsStatusBroadcaster
+        .refreshStatus(cwd)
+        .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach);
+      return result;
+    },
+  );
+
+  return WorktreeMcpService.of({ handoff, status, repair });
 });
 
 export const layer: Layer.Layer<
@@ -439,4 +474,5 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | JjWorkspaceRepair.JjWorkspaceRepair
 > = Layer.effect(WorktreeMcpService, make);

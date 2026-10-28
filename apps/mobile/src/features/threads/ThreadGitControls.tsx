@@ -15,6 +15,8 @@ import {
   type GitActionRequestInput,
   requiresDefaultBranchConfirmation,
   resolveQuickAction,
+  vcsProblemLabel,
+  vcsTerminologyFor,
 } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation } from "@react-navigation/native";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -52,6 +54,10 @@ function compactMenuStatus(gitStatus: VcsStatusResult | null): string {
   }
 
   const parts: string[] = [];
+  const problem = gitStatus.vcs?.problem;
+  if (problem) {
+    parts.push(vcsProblemLabel(problem, vcsTerminologyFor(gitStatus.vcs?.kind)));
+  }
   if (gitStatus.hasWorkingTreeChanges) {
     parts.push(`${gitStatus.workingTree.files.length} changed`);
   } else if (gitStatus.aheadCount === 0 && gitStatus.behindCount === 0) {
@@ -129,6 +135,8 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";
+  const vcsTerminology = vcsTerminologyFor(gitStatus?.vcs?.kind);
+  const refNoun = vcsTerminology.ref.toLowerCase();
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -174,7 +182,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     ).changeRequest;
     const prUrl = gitStatus?.pr?.state === "open" ? gitStatus.pr.url : null;
     if (!prUrl) {
-      Dialog.alert(`No open ${shortLabel}`, `This branch does not have an open ${singular}.`);
+      Dialog.alert(`No open ${shortLabel}`, `This ${refNoun} does not have an open ${singular}.`);
       return;
     }
     if (!(await openPullRequest(prUrl))) {
@@ -200,8 +208,8 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     ) {
       if (props.hasThread === false) {
         Dialog.alert(
-          "Choose a feature branch",
-          "Switch branches before publishing changes from this draft.",
+          `Choose a feature ${refNoun}`,
+          `Switch ${vcsTerminology.refs.toLowerCase()} before publishing changes from this draft.`,
         );
         return;
       }
@@ -264,6 +272,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 
   return {
     currentBranchLabel,
+    gitInspectorSummary: `Commit, files, ${vcsTerminology.refs.toLowerCase()}`,
     isRepo,
     openFiles,
     openGitInspector,
@@ -400,7 +409,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
             description:
               props.hasThread === false
                 ? "Available after the first message"
-                : "Commit, files, branches",
+                : model.gitInspectorSummary,
             disabled: props.hasThread === false,
             icon: { name: "ellipsis", type: "sfSymbol" },
             label: "More",
@@ -572,7 +581,7 @@ function threadGitMenuDefinition(
         subtitle:
           props.hasThread === false
             ? "Available after the first message"
-            : "Commit, files, branches",
+            : model.gitInspectorSummary,
         onPress: model.openGitInspector,
       },
     ],

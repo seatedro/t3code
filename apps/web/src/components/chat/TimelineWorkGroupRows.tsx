@@ -57,6 +57,7 @@ import {
   workEntryIconName,
 } from "./TimelineWorkEntryRow.logic";
 import { formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
+import { useVcsTerminology } from "~/hooks/useVcsTerminology";
 
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
@@ -311,6 +312,7 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
   const openTerminal = ctx.onOpenWorktreeSetupTerminal;
   const onOpenTerminal = openTerminal && terminalId ? () => openTerminal(terminalId) : null;
   const scriptName = snapshot.setupScript?.name ?? "Setup script";
+  const terminology = useVcsTerminology(ctx.activeThreadEnvironmentId, ctx.workspaceRoot);
   return (
     <Popover>
       <PopoverTrigger
@@ -329,6 +331,7 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
       <PopoverPopup side="bottom" align="end" width="lg" padding="compact">
         <WorktreeSetupCard
           snapshot={snapshot}
+          terminology={terminology}
           embedded
           onCancel={null}
           onWorkLocally={null}

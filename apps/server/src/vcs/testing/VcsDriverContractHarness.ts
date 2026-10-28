@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 
 import type { VcsDriverKind } from "@t3tools/contracts";
 import * as VcsDriver from "../VcsDriver.ts";
+import * as JjFixture from "./JjFixture.ts";
 
 function normalizePathForComparison(value: string): string {
   return value.replaceAll("\\", "/");
@@ -29,6 +30,15 @@ export interface VcsDriverFixture<R, E> {
     pattern: string,
   ) => Effect.Effect<void, E, R | FileSystem.FileSystem | Path.Path>;
 }
+
+export const jjContractFixture: VcsDriverFixture<never, PlatformError.PlatformError> = {
+  createRepo: JjFixture.createColocatedRepo,
+  writeFile: JjFixture.writeFile,
+  trackFile: (cwd, relativePath) =>
+    JjFixture.runJj(cwd, ["file", "track", relativePath]).pipe(Effect.asVoid),
+  commit: (cwd, message) => JjFixture.runJj(cwd, ["commit", "-m", message]).pipe(Effect.asVoid),
+  ignorePath: (cwd, pattern) => JjFixture.writeFile(cwd, ".gitignore", `${pattern}\n`),
+};
 
 export interface VcsDriverContractSuiteInput<R, E> {
   readonly name: string;

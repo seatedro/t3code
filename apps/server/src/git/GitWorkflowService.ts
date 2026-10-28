@@ -1,5 +1,8 @@
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 
@@ -27,11 +30,16 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsStatusVcs,
+  type VcsWorkspaceProblem,
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as JjCli from "../vcs/jj/JjCli.ts";
+import * as JjVcsDriver from "../vcs/jj/JjVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as JjWorkspaces from "../vcs/jj/JjWorkspaces.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 export class GitWorkflowService extends Context.Service<
@@ -51,6 +59,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly localStatus: (
       input: VcsStatusInput,
+      options?: { readonly snapshotWorkingCopy?: boolean },
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly remoteStatus: (
       input: VcsStatusInput,
@@ -147,6 +156,11 @@ function nonRepositoryLocalStatus(): VcsStatusLocalResult {
   };
 }
 
+// The repository exists but Git cannot read it; clients show the problem instead of a clean tree.
+function problemLocalStatus(vcs: VcsStatusVcs): VcsStatusLocalResult {
+  return { ...nonRepositoryLocalStatus(), isRepo: true, vcs };
+}
+
 function nonRepositoryStatus(): VcsStatusResult {
   return {
     ...nonRepositoryLocalStatus(),
@@ -168,12 +182,111 @@ function nonRepositoryListRefs(): VcsListRefsResult {
   };
 }
 
+const WORKSPACE_NAME_CACHE_TTL = Duration.seconds(30);
+
+// A colocated jj workspace is a real Git worktree, so Git workflows run unchanged there.
+const isGitBacked = (handle: VcsDriverRegistry.VcsDriverHandle) =>
+  handle.kind === "git" || (handle.kind === "jj" && handle.problem === undefined);
+
+const unsupportedDetail = (
+  subject: "workflow" | "command",
+  operation: string,
+  handle: VcsDriverRegistry.VcsDriverHandle,
+) =>
+  handle.problem
+    ? `The ${operation} ${subject} is unavailable in this ${handle.kind} repository: ${handle.problem.message}`
+    : `The ${operation} ${subject} currently supports Git repositories only; detected ${handle.kind}.`;
+
 /** @public */
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const jjCli = yield* JjCli.make;
+
+  const workspaceNames = yield* Cache.makeWith(
+    (rootPath: string) =>
+      JjVcsDriver.readCurrentWorkspaceName(rootPath).pipe(
+        Effect.provideService(JjCli.JjCli, jjCli),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      ),
+    {
+      capacity: 256,
+      timeToLive: Exit.match({
+        onSuccess: () => WORKSPACE_NAME_CACHE_TTL,
+        onFailure: () => Duration.zero,
+      }),
+    },
+  );
+
+  // Observe-mode reads cannot detect a stale workspace, so the last foreground snapshot's verdict
+  // sticks until a later snapshot succeeds.
+  const staleWorkspaces = new Map<string, VcsWorkspaceProblem>();
+
+  const snapshotJjWorkingCopy = Effect.fn("GitWorkflowService.snapshotJjWorkingCopy")(function* (
+    rootPath: string,
+  ) {
+    const problem = yield* jjCli
+      .run({
+        operation: "GitWorkflowService.snapshotJjWorkingCopy",
+        cwd: rootPath,
+        args: ["util", "snapshot"],
+        workingCopy: "snapshot",
+      })
+      .pipe(
+        Effect.as(null),
+        Effect.catch((error) => Effect.succeed(JjVcsDriver.problemFromError(error))),
+      );
+    if (problem?.code === "stale") staleWorkspaces.set(rootPath, problem);
+    else staleWorkspaces.delete(rootPath);
+    return problem;
+  });
+
+  const statusVcs = Effect.fn("GitWorkflowService.statusVcs")(function* (
+    handle: VcsDriverRegistry.VcsDriverHandle,
+    snapshotWorkingCopy: boolean,
+  ) {
+    if (handle.kind !== "jj") return { kind: handle.kind } satisfies VcsStatusVcs;
+    if (handle.problem) return { kind: "jj", problem: handle.problem } satisfies VcsStatusVcs;
+    const rootPath = handle.repository.rootPath;
+    const snapshotProblem = snapshotWorkingCopy ? yield* snapshotJjWorkingCopy(rootPath) : null;
+    const problem = snapshotProblem ?? staleWorkspaces.get(rootPath);
+    return yield* Cache.get(workspaceNames, rootPath).pipe(
+      Effect.map((name): VcsStatusVcs => ({
+        kind: "jj",
+        ...(name !== null && name.length > 0 && name === name.trim()
+          ? { workspaceName: name }
+          : {}),
+        ...(problem ? { problem } : {}),
+      })),
+      Effect.catch((error) =>
+        Effect.succeed<VcsStatusVcs>({
+          kind: "jj",
+          problem: JjVcsDriver.problemFromError(error),
+        }),
+      ),
+    );
+  });
+
+  const jjWorkspaces = yield* JjWorkspaces.JjWorkspaces;
+
+  const asGitCommandError = (operation: string, cwd: string) => (cause: { message: string }) =>
+    new GitCommandError({ operation, command: "jj", cwd, detail: cause.message, cause });
+
+  // jj repos import every T3 ref mutation with abandon-unreachable off, before a user's jj command does.
+  const importJjRefs = (operation: string, cwd: string) =>
+    jjWorkspaces
+      .repoRoot(cwd)
+      .pipe(
+        Effect.flatMap((root) =>
+          root === null
+            ? Effect.void
+            : jjWorkspaces
+                .importGitRefs(cwd)
+                .pipe(Effect.mapError(asGitCommandError(operation, cwd))),
+        ),
+      );
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -197,11 +310,11 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitManagerError({
         operation,
         cwd,
-        detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
+        detail: `${unsupportedDetail("workflow", operation, handle)} (${cwd})`,
       });
     }
     return handle;
@@ -223,12 +336,12 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
         cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+        detail: unsupportedDetail("command", operation, handle),
       });
     }
     return handle;
@@ -248,16 +361,16 @@ export const make = Effect.gen(function* () {
         ),
       );
       if (!handle) {
-        return false;
+        return null;
       }
-      if (handle.kind !== "git") {
+      if (handle.kind !== "git" && handle.kind !== "jj") {
         return yield* new GitManagerError({
           operation,
           cwd,
-          detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
+          detail: `${unsupportedDetail("workflow", operation, handle)} (${cwd})`,
         });
       }
-      return true;
+      return handle;
     },
   );
 
@@ -279,12 +392,12 @@ export const make = Effect.gen(function* () {
     if (!handle) {
       return false;
     }
-    if (handle.kind !== "git") {
+    if (!isGitBacked(handle)) {
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
         cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+        detail: unsupportedDetail("command", operation, handle),
       });
     }
     return true;
@@ -301,7 +414,7 @@ export const make = Effect.gen(function* () {
   return GitWorkflowService.of({
     isRepository: Effect.fn("GitWorkflowService.isRepository")(function (cwd) {
       return registry.detect({ cwd }).pipe(
-        Effect.map((handle) => handle?.kind === "git"),
+        Effect.map((handle) => handle !== null && isGitBacked(handle)),
         Effect.mapError(
           (cause) =>
             new GitManagerError({
@@ -346,28 +459,50 @@ export const make = Effect.gen(function* () {
             Effect.map((result) => result.stdout.trim().length > 0),
           );
     }),
-    status: Effect.fn("GitWorkflowService.status")(function (input) {
-      return detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository ? gitManager.status(input) : Effect.succeed(nonRepositoryStatus()),
-        ),
+    status: Effect.fn("GitWorkflowService.status")(function* (input) {
+      const handle = yield* detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd);
+      if (!handle) return nonRepositoryStatus();
+      if (handle.problem) {
+        return {
+          ...nonRepositoryStatus(),
+          ...problemLocalStatus({ kind: handle.kind, problem: handle.problem }),
+        };
+      }
+      const [status, vcs] = yield* Effect.all(
+        [gitManager.status(input), statusVcs(handle, false)],
+        {
+          concurrency: "unbounded",
+        },
       );
+      return { ...status, vcs };
     }),
-    localStatus: Effect.fn("GitWorkflowService.localStatus")(function (input) {
-      return detectGitRepositoryForStatus("GitWorkflowService.localStatus", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository
-            ? gitManager.localStatus(input)
-            : Effect.succeed(nonRepositoryLocalStatus()),
-        ),
+    localStatus: Effect.fn("GitWorkflowService.localStatus")(function* (input, options) {
+      const handle = yield* detectGitRepositoryForStatus(
+        "GitWorkflowService.localStatus",
+        input.cwd,
       );
+      if (!handle) return nonRepositoryLocalStatus();
+      if (handle.problem) {
+        return problemLocalStatus({ kind: handle.kind, problem: handle.problem });
+      }
+      // A jj snapshot rewrites the Git index, so Git status must read after it.
+      const snapshotVcs = options?.snapshotWorkingCopy ? yield* statusVcs(handle, true) : null;
+      const [status, vcs] = yield* Effect.all(
+        [
+          gitManager.localStatus(input),
+          snapshotVcs ? Effect.succeed(snapshotVcs) : statusVcs(handle, false),
+        ],
+        { concurrency: "unbounded" },
+      );
+      return { ...status, vcs };
     }),
-    remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function (input, options) {
-      return detectGitRepositoryForStatus("GitWorkflowService.remoteStatus", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository ? gitManager.remoteStatus(input, options) : Effect.succeed(null),
-        ),
+    remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function* (input, options) {
+      const handle = yield* detectGitRepositoryForStatus(
+        "GitWorkflowService.remoteStatus",
+        input.cwd,
       );
+      if (!handle || handle.problem) return null;
+      return yield* gitManager.remoteStatus(input, options);
     }),
     invalidateLocalStatus: gitManager.invalidateLocalStatus,
     invalidateRemoteStatus: gitManager.invalidateRemoteStatus,
@@ -377,25 +512,52 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.pullCurrentBranch(cwd)),
       );
     }),
-    runStackedAction: Effect.fn("GitWorkflowService.runStackedAction")(function (input, options) {
-      return ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
+    runStackedAction: Effect.fn("GitWorkflowService.runStackedAction")(function* (input, options) {
+      const operation = "GitWorkflowService.runStackedAction";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot !== null) {
+        yield* jjWorkspaces
+          .ensureBranchAttached({ cwd: input.cwd })
+          .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      }
+      const actionOptions: GitManager.GitRunStackedActionOptions | undefined =
+        jjRoot === null
+          ? options
+          : {
+              ...options,
+              commit: (commit) =>
+                jjWorkspaces
+                  .commit(commit)
+                  .pipe(Effect.mapError(asGitCommandError(operation, commit.cwd))),
+            };
+      const result = yield* ensureGit(operation, input.cwd).pipe(
         Effect.flatMap((handle) =>
           input.featureBranch
             ? withCheckoutLease(
                 handle.repository.rootPath,
-                gitManager.runStackedAction(input, options),
+                gitManager.runStackedAction(input, actionOptions),
               )
-            : gitManager.runStackedAction(input, options),
+            : gitManager.runStackedAction(input, actionOptions),
         ),
       );
+      if (jjRoot !== null) yield* importJjRefs(operation, input.cwd);
+      return result;
     }),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
     ),
     preparePullRequestThread: Effect.fn("GitWorkflowService.preparePullRequestThread")(
-      function (input) {
-        return ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
+      function* (input) {
+        if (input.mode === "worktree" && (yield* jjWorkspaces.repoRoot(input.cwd)) !== null) {
+          return yield* new GitManagerError({
+            operation: "GitWorkflowService.preparePullRequestThread",
+            cwd: input.cwd,
+            detail:
+              "Pull request worktrees are not supported in jj repositories yet. Check the pull request out locally instead.",
+          });
+        }
+        return yield* ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
           Effect.flatMap((handle) =>
             input.mode === "local"
               ? withCheckoutLease(
@@ -414,10 +576,27 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function (input, options) {
-      return ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
-        Effect.andThen(gitManager.createWorktree(input, options)),
-      );
+    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function* (input, options) {
+      const operation = "GitWorkflowService.createWorktree";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot === null) {
+        return yield* ensureGitCommand(operation, input.cwd).pipe(
+          Effect.andThen(gitManager.createWorktree(input, options)),
+        );
+      }
+      const created = yield* jjWorkspaces
+        .create({
+          repoRoot: jjRoot,
+          path: input.path,
+          baseRef: input.refName,
+          branch: input.newRefName ?? input.refName,
+          createBranch: input.newRefName !== undefined,
+        })
+        .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      if (options?.progress?.onWorktreeClaimed) {
+        yield* options.progress.onWorktreeClaimed(created.path);
+      }
+      return { worktree: { path: created.path, refName: created.branch } };
     }),
     listLocalBranchNames: Effect.fn("GitWorkflowService.listLocalBranchNames")(function (cwd) {
       return ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
@@ -460,19 +639,29 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
-    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
-      return ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
-      );
+    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function* (input) {
+      const operation = "GitWorkflowService.removeWorktree";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot === null) {
+        return yield* ensureGitCommand(operation, input.cwd).pipe(
+          Effect.andThen(git.removeWorktree(input)),
+        );
+      }
+      yield* jjWorkspaces
+        .forget({ repoRoot: jjRoot, path: input.path, force: input.force === true })
+        .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
     }),
-    pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function (input) {
-      return ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
+    pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function* (input) {
+      // `git worktree prune` un-colocates missing jj workspaces.
+      if ((yield* jjWorkspaces.repoRoot(input.cwd)) !== null) return;
+      return yield* ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
         Effect.andThen(git.pruneWorktrees(input)),
       );
     }),
     deleteLocalBranch: Effect.fn("GitWorkflowService.deleteLocalBranch")(function (input) {
       return ensureGitCommand("GitWorkflowService.deleteLocalBranch", input.cwd).pipe(
         Effect.andThen(git.deleteLocalBranch(input)),
+        Effect.tap(() => importJjRefs("GitWorkflowService.deleteLocalBranch", input.cwd)),
       );
     }),
     createRef: Effect.fn("GitWorkflowService.createRef")(function (input) {
@@ -482,6 +671,7 @@ export const make = Effect.gen(function* () {
             ? withCheckoutLease(handle.repository.rootPath, git.createRef(input))
             : git.createRef(input),
         ),
+        Effect.tap(() => importJjRefs("GitWorkflowService.createRef", input.cwd)),
       );
     }),
     switchRef: Effect.fn("GitWorkflowService.switchRef")(function (input) {
@@ -489,12 +679,22 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((handle) =>
           withCheckoutLease(handle.repository.rootPath, Effect.scoped(git.switchRef(input))),
         ),
+        Effect.tap(() => importJjRefs("GitWorkflowService.switchRef", input.cwd)),
       );
     }),
-    renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function (input) {
-      return ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
+    renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function* (input) {
+      const operation = "GitWorkflowService.renameBranch";
+      const jjRoot = yield* jjWorkspaces.repoRoot(input.cwd);
+      if (jjRoot !== null) {
+        yield* jjWorkspaces
+          .ensureBranchAttached({ cwd: input.cwd, branch: input.oldBranch })
+          .pipe(Effect.mapError(asGitCommandError(operation, input.cwd)));
+      }
+      const result = yield* ensureGit(operation, input.cwd).pipe(
         Effect.andThen(git.renameBranch(input)),
       );
+      if (jjRoot !== null) yield* importJjRefs(operation, input.cwd);
+      return result;
     }),
   });
 });

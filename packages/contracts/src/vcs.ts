@@ -268,6 +268,19 @@ export class VcsUnsupportedOperationError extends Schema.TaggedError<VcsUnsuppor
   }
 }
 
+export class VcsWorkspaceStaleError extends Schema.TaggedError<VcsWorkspaceStaleError>()(
+  "VcsWorkspaceStaleError",
+  {
+    operation: Schema.String,
+    cwd: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Workspace is stale in ${this.operation}: ${this.cwd} - ${this.detail}`;
+  }
+}
+
 export const VcsError = Schema.Union([
   VcsProcessSpawnError,
   VcsProcessExitError,
@@ -278,5 +291,42 @@ export const VcsError = Schema.Union([
   VcsProcessMissingExitCodeError,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  VcsWorkspaceStaleError,
 ]);
 export type VcsError = typeof VcsError.Type;
+
+export const VcsWorkspaceProblem = Schema.Struct({
+  code: Schema.Literals(["stale", "unsupported", "error"]),
+  message: Schema.String,
+});
+export type VcsWorkspaceProblem = typeof VcsWorkspaceProblem.Type;
+
+export const VcsStatusVcs = Schema.Struct({
+  kind: VcsDriverKind,
+  workspaceName: Schema.optional(TrimmedNonEmptyString),
+  problem: Schema.optional(VcsWorkspaceProblem),
+});
+export type VcsStatusVcs = typeof VcsStatusVcs.Type;
+
+export const VcsRepairWorkspaceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type VcsRepairWorkspaceInput = typeof VcsRepairWorkspaceInput.Type;
+
+export const VcsRepairWorkspaceResult = Schema.Union([
+  Schema.Struct({
+    repaired: Schema.Literal(true),
+    preservedRef: TrimmedNonEmptyString.annotate({
+      description: "Git ref holding the workspace files as they were on disk before the repair.",
+    }),
+    divergentChangeIds: Schema.Array(TrimmedNonEmptyString).annotate({
+      description: "Divergent jj changes, left for the user to resolve.",
+    }),
+  }),
+  Schema.Struct({
+    repaired: Schema.Literal(false).annotate({
+      description: "The workspace was not stale, so nothing changed.",
+    }),
+  }),
+]);
+export type VcsRepairWorkspaceResult = typeof VcsRepairWorkspaceResult.Type;
