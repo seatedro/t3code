@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   OrchestratorMcpFailure,
   PreviewTabId,
@@ -21,6 +22,8 @@ import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http
 import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -939,4 +942,108 @@ it.effect("lists pull request watch tools only to threads that are not delegated
       expect(childTools).not.toContain("unwatch_pull_request");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "shows the memory tool only while its setting is on, and never to a delegated child",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scopeFor = (
+          token: string,
+          subagent: boolean,
+        ): McpInvocationContext.McpThreadInvocationScope => ({
+          environmentId,
+          requestNamespace: token,
+          thread: {
+            threadId: ThreadId.make(`thread-${token}`),
+            providerSessionId: token,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            subagent,
+          },
+          client: undefined,
+          // As ProviderSessionManager issues them: a subagent's credential never carries memory.
+          capabilities: new Set(subagent ? ["orchestration"] : ["orchestration", "memory"]),
+          issuedAt: 1,
+        });
+        const scopes = new Map([
+          ["parentToken", scopeFor("parentToken", false)],
+          ["childToken", scopeFor("childToken", true)],
+        ]);
+        let memoryEnabled = false;
+        const serverLayer = McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provideMerge(McpHttpServer.layerMcpTransport),
+          Layer.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              resolve: (token) => Effect.succeed(scopes.get(token)),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.sync(() => ({ ...DEFAULT_SERVER_SETTINGS, memoryEnabled })),
+            }),
+          ),
+          Layer.provide(
+            Layer.mergeAll(
+              McpToolAccessTestkit.liveThreadsLayer,
+              SqlitePersistence.layerMemory,
+              NodeServices.layer,
+            ),
+          ),
+        );
+        yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+          Layer.build,
+        );
+        const httpClient = yield* HttpClient.HttpClient;
+        const session = (token: string) =>
+          Effect.gen(function* () {
+            const headers = {
+              accept: "application/json, text/event-stream",
+              authorization: `Bearer ${token}`,
+            };
+            const initialize = yield* httpClient.post("/mcp", {
+              headers,
+              body: HttpBody.text(
+                `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+                "application/json",
+              ),
+            });
+            const send = (body: string) =>
+              httpClient
+                .post("/mcp", {
+                  headers: {
+                    ...headers,
+                    "mcp-session-id": initialize.headers["mcp-session-id"]!,
+                    "mcp-protocol-version": "2025-06-18",
+                  },
+                  body: HttpBody.text(body, "application/json"),
+                })
+                .pipe(Effect.flatMap((response) => response.json));
+            return {
+              tools: send(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`).pipe(
+                Effect.map((body) =>
+                  (
+                    body as {
+                      readonly result: { readonly tools: ReadonlyArray<{ readonly name: string }> };
+                    }
+                  ).result.tools.map((tool) => tool.name),
+                ),
+              ),
+              wake: send(
+                `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"memory","arguments":{"command":"wake"}}}`,
+              ).pipe(Effect.map((body) => JSON.stringify(body))),
+            };
+          });
+
+        const parent = yield* session("parentToken");
+        expect(yield* parent.tools).not.toContain("memory");
+        // A provider that listed tools before the switch went off still cannot call it.
+        expect(yield* parent.wake).toContain("Tool 'memory' not found");
+
+        memoryEnabled = true;
+        expect(yield* parent.tools).toContain("memory");
+        expect(yield* parent.wake).toContain("No memories yet");
+        expect(yield* (yield* session("childToken")).tools).not.toContain("memory");
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

@@ -27,6 +27,15 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
 
+// Fork: sent only to threads whose MCP credential carries `memory`, which follows Settings → Memory.
+export const T3_CODE_MEMORY_INSTRUCTIONS = `## T3 Code memory
+
+The \`memory\` tool is your permanent memory in this environment. In a new thread, call it with \`wake\` before any other tool and do what it prints, to the end. As you work, \`note\` what is worth keeping. Subagents you start never use it.`;
+
+export const hasT3Memory = (
+  session: { readonly capabilities?: ReadonlySet<string> | undefined } | undefined,
+): boolean => session?.capabilities?.has("memory") === true;
+
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code browser
@@ -49,6 +58,7 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
+  readonly memory?: boolean;
 }
 
 /** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
@@ -61,7 +71,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasT3Mcp === input.state.hasT3Mcp
+    input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
+    input.previousState.memory === input.state.memory
   ) {
     return input.prompt;
   }
@@ -74,26 +85,34 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
           T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
+          ...(input.state.memory === true ? [T3_CODE_MEMORY_INSTRUCTIONS] : []),
         ]
       : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-function prependT3OrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+function prependT3OrchestrationInstructions(prompt: string, memory: boolean): string {
+  const instructions = memory
+    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}\n\n${T3_CODE_MEMORY_INSTRUCTIONS}`
+    : T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim();
+  return `<t3_code_orchestration_instructions>${instructions}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
 export function t3OrchestrationPromptForFirstRun(input: {
   readonly prompt: string;
   readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
+  readonly memory?: boolean;
 }): string {
   return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt)
+    ? prependT3OrchestrationInstructions(input.prompt, input.memory === true)
     : input.prompt;
 }
 
-export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
-  return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
+export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean, memory = false): string | undefined {
+  if (!hasT3Mcp) return undefined;
+  return memory
+    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_MEMORY_INSTRUCTIONS}\n`
+    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
 }

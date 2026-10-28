@@ -3,6 +3,7 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
+  T3_CODE_MEMORY_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_SECTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
@@ -16,6 +17,7 @@ For iOS Simulators and Android Emulators here, call \`device_list\`, then \`devi
 export interface T3CodeToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
+  readonly memory?: boolean;
 }
 
 const normalizeAvailability = (
@@ -29,6 +31,7 @@ const toolInstructions = (availability: boolean | T3CodeToolAvailability): strin
   return [
     tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "",
     tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : "",
+    tools.memory === true ? T3_CODE_MEMORY_INSTRUCTIONS : "",
   ]
     .filter(Boolean)
     .join("\n\n");
