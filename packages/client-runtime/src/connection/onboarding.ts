@@ -265,6 +265,15 @@ function mapTailnetSessionError(label: string) {
         via: "direct",
       });
     }
+    if (error._tag === "EnvironmentInternalError" && error.reason === "tailnet_trust_unavailable") {
+      return new ConnectionTransientError({
+        reason: "remote-unavailable",
+        detail: `Tailscale on ${label} couldn't answer just now. Try again in a moment.`,
+        traceId: error.traceId,
+        hop: "server",
+        via: "direct",
+      });
+    }
     if (error._tag === "RemoteEnvironmentAuthUndeclaredStatusError" && error.status === 404) {
       return new ConnectionBlockedError({
         reason: "unsupported",
@@ -416,6 +425,10 @@ export const prepareBearerConnectionUpdate = Effect.fn(
       label,
       httpBaseUrl,
       wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+      // The credential is unchanged, and so is how it was obtained.
+      ...(entry.profile.value.admission === undefined
+        ? {}
+        : { admission: entry.profile.value.admission }),
     }),
     credential: credential.value,
   });

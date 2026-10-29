@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -26,6 +27,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerHttp from "../http.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as TailnetHttp from "./http.ts";
 import { TailnetDiscovery } from "./TailnetDiscovery.ts";
 import * as TailnetTrust from "./TailnetTrust.ts";
@@ -67,7 +69,7 @@ const phoneWhois: TailscaleWhois = {
 };
 
 /** Only tailscaled is faked; routing, CORS, auth, trust and sessions are the server's own. */
-const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
+const makeLayerRoutes = (tailnetTrustEnabled: boolean, tailscaleRunning: boolean) =>
   HttpApiBuilder.layer(TailnetTestApi).pipe(
     Layer.provide(AuthHttp.layer),
     Layer.provide(TailnetHttp.layer),
@@ -78,6 +80,7 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
     Layer.provideMerge(
       EnvironmentAuth.layer.pipe(
         Layer.provide(TailnetSessionGate.layer),
+        Layer.provide(ManagedPolicy.layerTest()),
         Layer.provideMerge(SqlitePersistence.layerMemory),
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ServerEnvironment.layerIdentity),
@@ -87,18 +90,22 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
       Layer.succeed(
         TailscaleLocal,
         TailscaleLocal.of({
-          tailnet: Effect.succeed({
-            running: true,
-            self: tailscaleNode({
-              stableId: "nPulsar",
-              name: "pulsar",
-              magicDnsName: "pulsar.tail87c919.ts.net",
-              os: "linux",
-              tailnetIpv4Addresses: [SERVER_IP],
-              tailnetAddresses: [SERVER_IP],
-            }),
-            peers: [tailscaleNode({})],
-          }),
+          tailnet: Effect.succeed(
+            tailscaleRunning
+              ? {
+                  running: true,
+                  self: tailscaleNode({
+                    stableId: "nPulsar",
+                    name: "pulsar",
+                    magicDnsName: "pulsar.tail87c919.ts.net",
+                    os: "linux",
+                    tailnetIpv4Addresses: [SERVER_IP],
+                    tailnetAddresses: [SERVER_IP],
+                  }),
+                  peers: [tailscaleNode({})],
+                }
+              : null,
+          ),
           whois: (address) => Effect.succeed(address === PHONE_IP ? phoneWhois : null),
         }),
       ),
@@ -107,7 +114,7 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-tailnet-http-" })),
     Layer.provideMerge(
       HttpPlatform.layer.pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Layer.provideMerge(Etag.layerWeak),
       ),
     ),
@@ -144,9 +151,12 @@ const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
 
 const withServer = <A>(
   use: (handle: (request: Request) => Promise<Response>) => Promise<A>,
-  options: { readonly tailnetTrustEnabled?: boolean } = {},
+  options: { readonly tailnetTrustEnabled?: boolean; readonly tailscaleRunning?: boolean } = {},
 ) => {
-  const layerRoutes = makeLayerRoutes(options.tailnetTrustEnabled ?? true);
+  const layerRoutes = makeLayerRoutes(
+    options.tailnetTrustEnabled ?? true,
+    options.tailscaleRunning ?? true,
+  );
   const context = Context.make(ServerSecretStore.ServerSecretStore, unusedSecretStore);
   return Effect.acquireUseRelease(
     Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
@@ -205,6 +215,17 @@ it.effect("tells a trusted device that this machine has trust off", () =>
       });
     },
     { tailnetTrustEnabled: false },
+  ),
+);
+
+it.effect("tells a device to try again while this machine's Tailscale cannot answer", () =>
+  withServer(
+    async (handle) => {
+      const issued = await handle(askForSession());
+      expect(issued.status).toBe(500);
+      expect(await issued.json()).toMatchObject({ reason: "tailnet_trust_unavailable" });
+    },
+    { tailscaleRunning: false },
   ),
 );
 
