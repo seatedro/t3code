@@ -18,6 +18,7 @@ import {
 } from "../cliAuthFormat.ts";
 import * as ServerConfig from "../config.ts";
 import { authScopesFlag } from "./authScopes.ts";
+import { tailnetTrustCommand } from "./tailnetTrust.ts";
 import {
   authLocationFlags,
   type CliAuthLocationFlags,
@@ -327,5 +328,5 @@ const sessionCommand = Command.make("session").pipe(
 
 export const authCommand = Command.make("auth").pipe(
   Command.withDescription("Manage the local auth control plane for headless deployments."),
-  Command.withSubcommands([pairingCommand, sessionCommand, connectDeviceCommand]),
+  Command.withSubcommands([pairingCommand, sessionCommand, connectDeviceCommand, tailnetTrustCommand]),
 );
