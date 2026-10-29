@@ -35,6 +35,8 @@ import {
   prepareBearerConnectionUpdate,
   preparePairingRegistration,
   prepareSshRegistration,
+  prepareTailnetRegistration,
+  tailnetCandidateBaseUrls,
 } from "./onboarding.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
@@ -61,6 +63,12 @@ function layerPairingHttp(
     readonly selfUpdate?: boolean;
     readonly grantScopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly exchangeGate?: { readonly reached: () => void; readonly release: Promise<void> };
+    readonly unreachableOrigins?: ReadonlyArray<string>;
+    readonly tailnetSession?:
+      | "granted"
+      | "tailnet_trust_disabled"
+      | "tailnet_device_not_trusted"
+      | 404;
   },
 ) {
   const grantScopes = options?.grantScopes ?? AuthStandardClientScopes;
@@ -68,6 +76,38 @@ function layerPairingHttp(
   const fetchFn = ((input, init = {}) => {
     const url = String(input);
     calls.push({ url, init });
+    if (options?.unreachableOrigins?.includes(new URL(url).origin) === true) {
+      return Promise.reject(new TypeError("Network request failed"));
+    }
+
+    if (url.endsWith("/api/auth/tailnet-session")) {
+      const outcome = options?.tailnetSession ?? "granted";
+      if (outcome === 404) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      if (outcome !== "granted") {
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentOperationForbiddenError",
+              code: "operation_forbidden",
+              reason: outcome,
+              traceId: "trace-tailnet-test",
+            },
+            { status: 403 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          access_token: "tailnet-bearer-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "Bearer",
+          expires_in: 3600,
+          scope: grantScopes.join(" "),
+        }),
+      );
+    }
 
     if (url.endsWith("/.well-known/t3/environment")) {
       if (options?.failDescriptor === true) {
@@ -520,20 +560,39 @@ describe("connection onboarding", () => {
     }).pipe(Effect.provide(layerPairingOnboarding({ grantScopes: scopes }))),
   );
 
-  it.effect("refuses to add a route that reaches a different machine, keeping the code", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const error = yield* preparePairingRegistration({
-        host: "remote.example.test",
-        pairingCode: "pairing-token",
-        expectedEnvironmentId: EnvironmentId.make("some-other-machine"),
-      }).pipe(Effect.provide(layerPairingOnboarding(undefined, calls)), Effect.flip);
-      expect(error).toMatchObject({ reason: "configuration" });
-      expect(error.message).toContain("different machine");
-      expect(calls.map((call) => call.url)).toEqual([
-        "https://remote.example.test/.well-known/t3/environment",
-      ]);
-    }),
+  it.effect.each([
+    {
+      method: "a pairing code",
+      prepare: (expectedEnvironmentId: EnvironmentId) =>
+        preparePairingRegistration({
+          host: "remote.example.test",
+          pairingCode: "pairing-token",
+          expectedEnvironmentId,
+        }),
+    },
+    {
+      method: "tailnet trust",
+      prepare: (expectedEnvironmentId: EnvironmentId) =>
+        prepareTailnetRegistration({
+          address: "https://remote.example.test",
+          expectedEnvironmentId,
+        }),
+    },
+  ])(
+    "refuses to add a route that reaches a different machine before using $method",
+    ({ prepare }) =>
+      Effect.gen(function* () {
+        const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+        const error = yield* prepare(EnvironmentId.make("some-other-machine")).pipe(
+          Effect.provide(layerPairingOnboarding(undefined, calls)),
+          Effect.flip,
+        );
+        expect(error).toMatchObject({ reason: "configuration" });
+        expect(error.message).toContain("different machine");
+        expect(calls.map((call) => call.url)).toEqual([
+          "https://remote.example.test/.well-known/t3/environment",
+        ]);
+      }),
   );
 
   it.effect("refuses an outdated server that cannot update itself", () =>
@@ -568,6 +627,83 @@ describe("connection onboarding", () => {
       expect(calls.map((call) => call.url)).toEqual([
         "https://remote.example.test/.well-known/t3/environment",
       ]);
+    }),
+  );
+
+  it.each([
+    ["macbook", ["http://macbook:3773/", "https://macbook/"]],
+    ["100.101.102.103", ["http://100.101.102.103:3773/", "https://100.101.102.103/"]],
+    [
+      "macbook.tail1234.ts.net",
+      ["https://macbook.tail1234.ts.net/", "http://macbook.tail1234.ts.net:3773/"],
+    ],
+    ["macbook.tail1234.ts.net:443", ["https://macbook.tail1234.ts.net/"]],
+    ["macbook.tail1234.ts.net:3773", ["http://macbook.tail1234.ts.net:3773/"]],
+    ["macbook:80", ["http://macbook:80/"]],
+    ["[fd7a:115c:a1e0::1]:3773", ["http://[fd7a:115c:a1e0::1]:3773/"]],
+    ["https://macbook.tail1234.ts.net/some/path", ["https://macbook.tail1234.ts.net/"]],
+    [" macbook/ ", ["http://macbook:3773/", "https://macbook/"]],
+    ["", []],
+  ] as const)("tries %j at %j", (address, expected) => {
+    expect(tailnetCandidateBaseUrls(address)).toEqual(expected);
+  });
+
+  it.effect("connects through tailnet trust at the first address that answers", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      const registration = yield* prepareTailnetRegistration({ address: "remote" }).pipe(
+        Effect.provide(
+          layerPairingOnboarding({ unreachableOrigins: ["http://remote:3773"] }, calls),
+        ),
+      );
+
+      expect(registration).toMatchObject({
+        target: { environmentId: "environment-paired", label: "Paired environment" },
+        profile: { httpBaseUrl: "https://remote/", wsBaseUrl: "wss://remote/" },
+        credential: { token: "tailnet-bearer-token" },
+      });
+      expect(calls.map((call) => call.url)).toEqual([
+        "http://remote:3773/.well-known/t3/environment",
+        "https://remote/.well-known/t3/environment",
+        "https://remote/api/auth/tailnet-session",
+      ]);
+      const body = calls.at(-1)?.init.body;
+      expect(
+        JSON.parse(body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body)),
+      ).toEqual({
+        client_label: "T3 Code Test",
+        client_device_type: "desktop",
+        client_os: "Test OS",
+      });
+    }),
+  );
+
+  it.effect.each([
+    {
+      options: { tailnetSession: "tailnet_trust_disabled" },
+      detail:
+        'Turn on "Trust my Tailscale devices" on Paired environment, or enter a pairing code.',
+    },
+    {
+      options: { tailnetSession: "tailnet_device_not_trusted" },
+      detail:
+        "Paired environment doesn't recognize this device as yours on Tailscale. Enter a pairing code.",
+    },
+    {
+      options: { tailnetSession: 404 },
+      detail: "Paired environment needs an update to connect without a code. Enter a pairing code.",
+    },
+    {
+      options: { failDescriptor: true },
+      detail: "Couldn't reach remote. Check that Tailscale is on and T3 Code is running there.",
+    },
+  ] as const)("explains a refused tailnet connection: $detail", ({ options, detail }) =>
+    Effect.gen(function* () {
+      const error = yield* prepareTailnetRegistration({ address: "remote" }).pipe(
+        Effect.provide(layerPairingOnboarding(options)),
+        Effect.flip,
+      );
+      expect(error.message).toBe(detail);
     }),
   );
 
