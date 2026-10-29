@@ -45,6 +45,7 @@ import { LinkedEnvironmentsSettings } from "./LinkedEnvironmentsSettings";
 import { usePeerLinkHosts } from "~/state/peerLinks";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
+import { TailnetTrustSettings } from "./TailnetTrustSettings";
 import { Input } from "../ui/input";
 import {
   Dialog,
@@ -1244,6 +1245,7 @@ function ConnectionsSettingsContent({
                 canManageRelay={canManageRelay}
               />
             ) : null}
+            {isPrimaryAccess ? <TailnetTrustSettings /> : null}
             {accessEnvironment ? (
               <details className="group px-3 sm:px-4">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">

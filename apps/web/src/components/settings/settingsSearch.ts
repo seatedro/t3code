@@ -1103,6 +1103,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     localBackendManagementOnly: true,
   },
   {
+    id: "tailnet-trust",
+    title: "Trust my Tailscale devices",
+    to: "/settings/access",
+    searchTerms: ["tailnet tailscale trust devices pairing code sign in owner login tagged node"],
+  },
+  {
     id: "wsl-backend",
     title: "WSL backend",
     to: "/settings/access",
