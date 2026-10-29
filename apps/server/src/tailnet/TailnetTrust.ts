@@ -19,6 +19,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -27,8 +28,10 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import { ServerAuthAuthenticatedAccessTokenIssueError } from "../auth/EnvironmentAuth.ts";
 import {
+  admittedIdentityOf,
   isTailnetDeviceSubject,
-  TAILNET_DEVICE_SUBJECT_PREFIX,
+  tailnetDeviceSubject,
+  trustedIdentityOf,
 } from "../auth/TailnetSessionGate.ts";
 import { deriveAuthClientMetadata } from "../auth/utils.ts";
 import * as TailscaleLocal from "./TailscaleLocal.ts";
@@ -39,6 +42,8 @@ export interface TailnetDevice {
   readonly loginName: string;
   readonly os: string | null;
   readonly address: string;
+  /** Whose device it was let in as; stamped on its session. */
+  readonly trustedIdentity: string;
 }
 
 export class TailnetTrustRefusedError extends Schema.TaggedError<TailnetTrustRefusedError>()(
@@ -81,6 +86,24 @@ const browserRequestDetail = (headers: HttpServerRequest.HttpServerRequest["head
       ? "browser_fetch_site"
       : null;
 
+/**
+ * A proxy on a trusted device would hand its own clients, from the LAN or the internet, the
+ * device's identity. Proxies that say so are refused; a plain TCP forwarder cannot be told apart.
+ */
+const FORWARDING_HEADERS = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+  "via",
+  "tailscale-user-login",
+  "tailscale-funnel-request",
+] as const;
+
+const isForwarded = (headers: HttpServerRequest.HttpServerRequest["headers"]) =>
+  FORWARDING_HEADERS.some((name) => headers[name] !== undefined);
+
 /** The name or address in a Host header, without brackets, port, or a trailing dot. */
 const hostNameOf = (host: string | undefined): string | null => {
   const match = /^(\[[^\]]+\]|[^:[\]]+)(?::\d+)?$/u.exec(host?.trim().toLowerCase() ?? "");
@@ -105,7 +128,9 @@ function evaluateTailnetDevice(input: {
   readonly tailnet: TailscaleTailnet;
   readonly whois: TailscaleWhois;
   readonly configuredLogin: string;
-}): { readonly loginName: string; readonly stableId: string } | string {
+}):
+  | { readonly loginName: string; readonly stableId: string; readonly trustedIdentity: string }
+  | string {
   const { whois } = input;
   const self = input.tailnet.self;
   if (self === null) return "server_identity_unknown";
@@ -121,18 +146,15 @@ function evaluateTailnetDevice(input: {
   if (!input.tailnet.peers.some((peer) => peer.stableId === stableId && !peer.sharee)) {
     return "not_a_tailnet_member";
   }
-  if (self.tagged) {
-    const configured = input.configuredLogin.trim().toLowerCase();
-    if (configured === "") return "tagged_server_without_login";
-    return whois.loginName.toLowerCase() === configured
-      ? { loginName: whois.loginName, stableId }
-      : "other_account";
+  const trustedIdentity = trustedIdentityOf(self, input.configuredLogin);
+  if (trustedIdentity === null) {
+    return self.tagged ? "tagged_server_without_login" : "server_identity_unknown";
   }
-  if (self.loginName === null || self.userId === null) return "server_identity_unknown";
-  // The same login in another tailnet is another user with its own id.
-  return whois.loginName === self.loginName && whois.userId === self.userId
-    ? { loginName: whois.loginName, stableId }
-    : "other_account";
+  const matches = self.tagged
+    ? whois.loginName.toLowerCase() === input.configuredLogin.trim().toLowerCase()
+    : // The same login in another tailnet is another user with its own id.
+      whois.loginName === self.loginName && whois.userId === self.userId;
+  return matches ? { loginName: whois.loginName, stableId, trustedIdentity } : "other_account";
 }
 
 export class TailnetTrust extends Context.Service<
@@ -186,6 +208,7 @@ export const make = Effect.gen(function* () {
       if (!current.tailnetTrustEnabled) return yield* disabled("setting_off");
       const browser = browserRequestDetail(request.headers);
       if (browser !== null) return yield* notTrusted(browser);
+      if (isForwarded(request.headers)) return yield* notTrusted("forwarded_request");
       // Checked before running tailscale, so other networks cannot make the server spawn it.
       const { remote, local } = socketOf(request);
       if (
@@ -206,7 +229,9 @@ export const make = Effect.gen(function* () {
       if (hostName === null || !ownHostNames(self).has(hostName)) {
         return yield* notTrusted("foreign_host");
       }
-      const whois = yield* tailscale.whois(remote);
+      const whois = yield* tailscale
+        .whois(remote)
+        .pipe(Effect.mapError(() => notTrusted("tailscale_busy")));
       if (whois === null) return yield* notTrusted("unknown_peer");
       const verdict = evaluateTailnetDevice({
         tailnet,
@@ -220,6 +245,7 @@ export const make = Effect.gen(function* () {
         loginName: verdict.loginName,
         os: whois.os,
         address: remote,
+        trustedIdentity: verdict.trustedIdentity,
       } satisfies TailnetDevice;
     },
     // Off-tailnet callers are refused before Tailscale is asked; only a tailnet refusal says much.
@@ -243,7 +269,7 @@ export const make = Effect.gen(function* () {
     const session = yield* sessions
       .issue({
         method: "bearer-access-token",
-        subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}${device.stableId}`,
+        subject: tailnetDeviceSubject(device.stableId, device.trustedIdentity),
         scopes: AuthStandardClientScopes,
         replaceActiveForSubjectAndMethod: true,
         client: {
@@ -277,36 +303,73 @@ export const make = Effect.gen(function* () {
     } satisfies AuthAccessTokenResult;
   });
 
-  const reconcile: TailnetTrust["Service"]["reconcile"] = Effect.gen(function* () {
-    if (yield* trustEnabled) return;
+  const revokeAdmitted = Effect.fn("TailnetTrust.revokeAdmitted")(function* (
+    keep: (subject: string) => boolean,
+  ) {
     const active = yield* sessions.listActive();
-    const admitted = active.filter((session) => isTailnetDeviceSubject(session.subject));
-    yield* Effect.forEach(admitted, (session) => sessions.revoke(session.sessionId), {
+    const revoked = active.filter(
+      (session) => isTailnetDeviceSubject(session.subject) && !keep(session.subject),
+    );
+    yield* Effect.forEach(revoked, (session) => sessions.revoke(session.sessionId), {
       discard: true,
     });
-    if (admitted.length > 0) {
+    if (revoked.length > 0) {
       yield* Effect.logInfo("Revoked sessions admitted by Tailscale identity.", {
-        count: admitted.length,
+        count: revoked.length,
       });
     }
-  }).pipe(
+  });
+  // A failed pass is retried; meanwhile the gate in EnvironmentAuth already refuses them.
+  const revokeAll = revokeAdmitted(() => false).pipe(
+    Effect.retry({ schedule: Schedule.exponential("1 second"), times: 5 }),
     Effect.catchCause((cause) =>
       Effect.logError("Failed to revoke sessions admitted by Tailscale identity.", { cause }),
     ),
+  );
+
+  /**
+   * Revokes what these trust settings no longer admit: everything when trust is off, otherwise
+   * sessions stamped with another identity (a changed login, or this machine signed in to
+   * Tailscale as someone else). Decided from the value given, not read again, so an off that
+   * is turned back on before this runs still signs devices out.
+   */
+  const revokeNotAdmittedBy = Effect.fn("TailnetTrust.revokeNotAdmittedBy")(function* (trust: {
+    readonly tailnetTrustEnabled: boolean;
+    readonly tailnetTrustLogin: string;
+  }) {
+    if (!trust.tailnetTrustEnabled) return yield* revokeAll;
+    const self = (yield* tailscale.tailnet)?.self ?? null;
+    if (self === null) return;
+    const trusted = trustedIdentityOf(self, trust.tailnetTrustLogin);
+    yield* revokeAdmitted(
+      (subject) => trusted !== null && admittedIdentityOf(subject) === trusted,
+    ).pipe(
+      Effect.retry({ schedule: Schedule.exponential("1 second"), times: 5 }),
+      Effect.catchCause((cause) =>
+        Effect.logError("Failed to revoke sessions admitted by Tailscale identity.", { cause }),
+      ),
+    );
+  });
+
+  const reconcile: TailnetTrust["Service"]["reconcile"] = settings.getSettings.pipe(
+    Effect.orElseSucceed(() => ({ tailnetTrustEnabled: false, tailnetTrustLogin: "" })),
+    Effect.flatMap(revokeNotAdmittedBy),
     Effect.withSpan("TailnetTrust.reconcile"),
   );
 
-  // Live changes, including settings.json edits by `t3 auth tailnet-trust off`. Revoking here
-  // tidies the session list; the gate in EnvironmentAuth is what refuses them while off.
+  // Each distinct value as it arrives, including settings.json edits by `t3 auth tailnet-trust`.
   const changes = yield* settings.subscribeChanges;
-  yield* Effect.gen(function* () {
-    yield* settings.ready;
-    yield* changes.pipe(
-      Stream.map((next) => next.tailnetTrustEnabled),
-      Stream.changes,
-      Stream.runForEach(() => reconcile),
-    );
-  }).pipe(
+  yield* changes.pipe(
+    Stream.map((next) => ({
+      tailnetTrustEnabled: next.tailnetTrustEnabled,
+      tailnetTrustLogin: next.tailnetTrustLogin.trim().toLowerCase(),
+    })),
+    Stream.changesWith(
+      (left, right) =>
+        left.tailnetTrustEnabled === right.tailnetTrustEnabled &&
+        left.tailnetTrustLogin === right.tailnetTrustLogin,
+    ),
+    Stream.runForEach(revokeNotAdmittedBy),
     Effect.catchCause((cause) =>
       Effect.logError("Tailnet trust stopped following settings.", { cause }),
     ),

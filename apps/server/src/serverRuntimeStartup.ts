@@ -519,7 +519,8 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       ),
     );
-    // Before any request is served: settings.json may have turned trust off while stopped.
+    // Requests wait for command readiness, which comes after this. settings.json may have turned
+    // trust off, or changed whose devices it trusts, while the server was stopped.
     yield* runStartupPhase("tailnet.reconcile", tailnetTrust.reconcile);
 
     const welcomeBase = yield* resolveWelcomeBase;

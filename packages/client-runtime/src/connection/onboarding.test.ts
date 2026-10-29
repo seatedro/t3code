@@ -635,7 +635,7 @@ describe("connection onboarding", () => {
     ["100.101.102.103", ["http://100.101.102.103:3773/", "https://100.101.102.103/"]],
     [
       "macbook.tail1234.ts.net",
-      ["https://macbook.tail1234.ts.net/", "http://macbook.tail1234.ts.net:3773/"],
+      ["http://macbook.tail1234.ts.net:3773/", "https://macbook.tail1234.ts.net/"],
     ],
     ["macbook.tail1234.ts.net:443", ["https://macbook.tail1234.ts.net/"]],
     ["macbook.tail1234.ts.net:3773", ["http://macbook.tail1234.ts.net:3773/"]],
@@ -659,7 +659,11 @@ describe("connection onboarding", () => {
 
       expect(registration).toMatchObject({
         target: { environmentId: "environment-paired", label: "Paired environment" },
-        profile: { httpBaseUrl: "https://remote/", wsBaseUrl: "wss://remote/" },
+        profile: {
+          httpBaseUrl: "https://remote/",
+          wsBaseUrl: "wss://remote/",
+          admission: "tailnet-trust",
+        },
         credential: { token: "tailnet-bearer-token" },
       });
       expect(calls.map((call) => call.url)).toEqual([

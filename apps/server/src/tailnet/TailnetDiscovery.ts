@@ -51,14 +51,14 @@ const isOwnersCandidate = (self: TailscaleNode, configuredLogin: string) => {
     node.tailnetIpv4Addresses.length > 0;
 };
 
-/** Preferred first: Tailscale Serve's HTTPS name, then the direct ports. */
+/** Direct tailnet addresses first: only they carry tailnet trust; Serve's HTTPS name does not. */
 const candidateBaseUrls = (node: TailscaleNode, ports: ReadonlySet<number>): string[] => {
   const address = node.tailnetIpv4Addresses[0];
   return [
+    ...(address === undefined ? [] : [...ports].map((port) => `http://${address}:${port}/`)),
     ...(node.magicDnsName === null
       ? []
       : [buildTailscaleHttpsBaseUrl({ magicDnsName: node.magicDnsName })]),
-    ...(address === undefined ? [] : [...ports].map((port) => `http://${address}:${port}/`)),
   ];
 };
 
