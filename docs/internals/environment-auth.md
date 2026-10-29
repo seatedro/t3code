@@ -27,6 +27,27 @@ model. DPoP binds a token to a client's proof key; an invalid proof must fail
 rather than fall back to bearer authentication. The OAuth token-exchange
 vocabulary gives these grants a familiar meaning.
 
+### Tailnet devices skip pairing
+
+With `tailnetTrustEnabled`, [TailnetTrust](../../apps/server/src/tailnet/TailnetTrust.ts)
+issues a standard bearer session, without a code, to a device of the machine's own
+Tailscale user. Identity comes only from tailscaled's `whois`, never from the
+request. A direct connection qualifies only when both socket addresses are
+tailnet addresses. A Tailscale Serve request qualifies only when this server
+configured Serve, the socket is loopback, Host is the machine's MagicDNS name, and
+the whois of `X-Forwarded-For` agrees with Serve's login header. Relayed and
+DNS-rebound requests carry another Host, so they fail. Any program on a trusted
+device, or on this machine, can still pose as that device: the account is the
+boundary, as the setting says.
+
+The owner is the machine's own user, matched by login and user id, since the
+same login in another tailnet is another user. A tagged machine trusts the
+configured `tailnetTrustLogin`. Tagged, shared-in and sharee nodes never
+qualify. Later requests do not consult Tailscale again, so learned routes keep
+working; the way out is revocation. Sessions are marked by the
+`tailnet-device:` subject, and whenever the setting is seen off, including at
+startup, they are revoked.
+
 ### Guest links are not sessions
 
 A [guest link](../user/guest-links.md) gives one browser read access to one
