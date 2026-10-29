@@ -75,7 +75,15 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
     Layer.provide(ServerHttp.layerBrowserApiCors),
     Layer.provide(TailnetTrust.layer),
     Layer.provide(Layer.mock(TailnetDiscovery)({ peers: Effect.succeed(DISCOVERED) })),
-    Layer.provide(
+    Layer.provideMerge(
+      EnvironmentAuth.layer.pipe(
+        Layer.provide(TailnetSessionGate.layer),
+        Layer.provideMerge(SqlitePersistence.layerMemory),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ServerEnvironment.layerIdentity),
+      ),
+    ),
+    Layer.provideMerge(
       Layer.succeed(
         TailscaleLocal,
         TailscaleLocal.of({
@@ -93,14 +101,6 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean) =>
           }),
           whois: (address) => Effect.succeed(address === PHONE_IP ? phoneWhois : null),
         }),
-      ),
-    ),
-    Layer.provideMerge(
-      EnvironmentAuth.layer.pipe(
-        Layer.provide(TailnetSessionGate.layerFromSettings),
-        Layer.provideMerge(SqlitePersistence.layerMemory),
-        Layer.provide(ServerSecretStore.layer),
-        Layer.provide(ServerEnvironment.layerIdentity),
       ),
     ),
     Layer.provideMerge(ServerSettingsService.layerTest({ tailnetTrustEnabled })),
@@ -181,6 +181,7 @@ it.effect.each([
   { name: "a sandboxed page", headers: { origin: "null" } },
   { name: "a rebound page fetching same-origin", headers: { "sec-fetch-site": "same-origin" } },
   { name: "a rebound Host", headers: { host: "evil.example:3773" } },
+  { name: "a request a proxy forwarded", headers: { "x-forwarded-for": "203.0.113.9" } },
 ])("refuses $name on both routes", ({ headers }) =>
   withServer(async (handle) => {
     const issued = await handle(askForSession(headers));
@@ -223,26 +224,37 @@ it.effect("refuses a connection that did not arrive over the tailnet", () =>
   }),
 );
 
-it.effect("answers no browser preflight on the two routes trust admits", () =>
+it.effect("lets no page read a tailnet session, however the path is spelled", () =>
   withServer(async (handle) => {
-    const preflight = (path: string) =>
-      handle(
+    for (const path of [
+      "/api/auth/tailnet-session",
+      "/API/Auth/Tailnet-Session",
+      "/api/auth/tailnet-session/",
+      "//api//auth//tailnet-session",
+    ]) {
+      const issued = await handle(
         fromPhone(path, {
-          method: "OPTIONS",
-          headers: {
-            origin: "https://evil.example",
-            "access-control-request-method": "POST",
-            "access-control-request-headers": "content-type",
-          },
+          method: "POST",
+          headers: { "content-type": "application/json", origin: "https://evil.example" },
+          body: "{}",
         }),
       );
-    for (const path of ["/api/auth/tailnet-session", "/api/tailnet/peers"]) {
-      expect((await preflight(path)).headers.get("access-control-allow-origin")).toBeNull();
+      expect({ path, status: issued.status }).toEqual({ path, status: 403 });
+      expect(issued.headers.get("access-control-allow-origin")).toBeNull();
     }
-    // Other browser API routes keep their CORS.
-    expect((await preflight("/api/auth/session")).headers.get("access-control-allow-origin")).toBe(
-      "*",
+    // Even an admitted session is handed out without CORS, so only native clients see it.
+    const admitted = await handle(askForSession());
+    expect(admitted.status).toBe(200);
+    expect(admitted.headers.get("access-control-allow-origin")).toBeNull();
+    // Peers needs a session like any other route, so it keeps the usual CORS.
+    const { access_token } = (await admitted.json()) as { access_token: string };
+    const peers = await handle(
+      fromPhone("/api/tailnet/peers", {
+        headers: { authorization: `Bearer ${access_token}`, origin: "https://app.t3.codes" },
+      }),
     );
+    expect(peers.status).toBe(200);
+    expect(peers.headers.get("access-control-allow-origin")).toBe("*");
   }),
 );
 
@@ -256,6 +268,9 @@ it.effect.each([
     name: "a stale session cookie",
     credential: (cookieName: string) => ({ cookie: `${cookieName}=stale` }),
   },
+  { name: "Basic authorization", credential: () => ({ authorization: "Basic dXNlcjpwYXNz" }) },
+  { name: "a lowercase bearer scheme", credential: () => ({ authorization: "bearer token" }) },
+  { name: "an empty bearer", credential: () => ({ authorization: "Bearer " }) },
 ])("a trusted device with $name is not let in on its tailnet identity", ({ credential }) =>
   withServer(async (handle) => {
     const state = (await (await handle(fromPhone("/api/auth/session"))).json()) as {
