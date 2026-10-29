@@ -44,6 +44,7 @@ import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { isTailnetDeviceSubject, TailnetSessionGate } from "./TailnetSessionGate.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
@@ -784,6 +785,22 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const managedPolicy = yield* ManagedPolicy.ManagedPolicy;
   const devAuth = resolveReusableDevAuth(config);
+  const tailnetGate = yield* TailnetSessionGate;
+
+  const rejectWhileTailnetTrustOff = <S extends { readonly subject: string }>(session: S) =>
+    isTailnetDeviceSubject(session.subject)
+      ? tailnetGate.isOpen.pipe(
+          Effect.flatMap((open) =>
+            open
+              ? Effect.succeed(session)
+              : Effect.fail(
+                  new ServerAuthInvalidCredentialError({
+                    diagnostic: "Tailnet trust is off, so the sessions it admitted are refused.",
+                  }),
+                ),
+          ),
+        )
+      : Effect.succeed(session);
 
   const authenticateToken = (
     token: string,
@@ -803,6 +820,7 @@ export const make = Effect.gen(function* () {
       ),
       mapSessionVerificationErrors,
       Effect.flatMap(rejectMcpClientAudience),
+      Effect.flatMap(rejectWhileTailnetTrustOff),
       Effect.map((session) => ({
         sessionId: session.sessionId,
         subject: session.subject,
@@ -1478,7 +1496,11 @@ export const make = Effect.gen(function* () {
         if (websocketTicket && websocketTicket.trim().length > 0) {
           const session = yield* sessions
             .verifyWebSocketToken(websocketTicket)
-            .pipe(mapSessionVerificationErrors, Effect.flatMap(rejectMcpClientAudience));
+            .pipe(
+              mapSessionVerificationErrors,
+              Effect.flatMap(rejectMcpClientAudience),
+              Effect.flatMap(rejectWhileTailnetTrustOff),
+            );
           if (session.audience !== undefined && session.audience !== use) {
             return yield* new ServerAuthInvalidCredentialError({
               diagnostic: `WebSocket ticket was issued for the ${session.audience} route.`,

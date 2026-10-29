@@ -4,6 +4,7 @@ import {
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
+  AuthStandardClientScopes,
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import * as Effect from "effect/Effect";
@@ -1997,12 +1998,19 @@ export const ClientServerSettingsPatch = ServerSettingsPatch.mapFields(
   Struct.omit(["defaultTheme", "defaultThemeSetAt", "defaultAppearance", "defaultAppearanceSetAt"]),
 );
 
+/** These decide who gets a full-scope session without a code, so only a full-scope client may set them. */
+const TAILNET_TRUST_SETTING_KEYS: ReadonlySet<string> = new Set([
+  "tailnetTrustEnabled",
+  "tailnetTrustLogin",
+]);
+
 export function requiredScopesForServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ReadonlyArray<AuthEnvironmentScope> {
   let changesProviders = false;
   let changesSettings = false;
   let changesAccess = false;
+  let changesTailnetTrust = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     if (key === "requireConnectDeviceApproval") {
@@ -2017,6 +2025,7 @@ export function requiredScopesForServerSettingsPatch(
       changesProviders = true;
     } else {
       changesSettings = true;
+      changesTailnetTrust ||= TAILNET_TRUST_SETTING_KEYS.has(key);
     }
   }
   // Removing a secret provider also clears the settings fields that read from it.
@@ -2024,9 +2033,12 @@ export function requiredScopesForServerSettingsPatch(
     changesSettings = true;
   }
   return [
-    ...(changesSettings || (!changesProviders && !changesAccess) ? [AuthSettingsWriteScope] : []),
-    ...(changesProviders ? [AuthProvidersManageScope] : []),
-    ...(changesAccess ? [AuthAccessWriteScope] : []),
+    ...new Set([
+      ...(changesSettings || (!changesProviders && !changesAccess) ? [AuthSettingsWriteScope] : []),
+      ...(changesProviders ? [AuthProvidersManageScope] : []),
+      ...(changesAccess ? [AuthAccessWriteScope] : []),
+      ...(changesTailnetTrust ? AuthStandardClientScopes : []),
+    ]),
   ];
 }
 

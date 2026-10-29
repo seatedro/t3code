@@ -10,6 +10,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as TailnetDiscovery from "./TailnetDiscovery.ts";
 import { TailscaleLocal } from "./TailscaleLocal.ts";
 
@@ -29,6 +30,7 @@ const node = (
   loginName: "owner@github",
   tagged: false,
   tailnetIpv4Addresses: [address],
+  tailnetAddresses: [address],
   online: true,
   sharee: false,
   ...overrides,
@@ -45,6 +47,7 @@ const descriptor = (environmentId: string, label: string): ExecutionEnvironmentD
 const makeHarness = (
   tailnet: TailscaleTailnet | null,
   answers: Readonly<Record<string, ExecutionEnvironmentDescriptor>>,
+  tailnetTrustLogin = "",
 ) => {
   const probed: string[] = [];
   const layer = TailnetDiscovery.layer.pipe(
@@ -80,6 +83,7 @@ const makeHarness = (
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getEnvironmentId: Effect.succeed(OWN_ENVIRONMENT_ID),
         }),
+        ServerSettingsService.layerTest({ tailnetTrustLogin }),
       ),
     ),
   );
@@ -88,7 +92,7 @@ const makeHarness = (
 
 const peers = Effect.flatMap(TailnetDiscovery.TailnetDiscovery, (discovery) => discovery.peers);
 
-it.effect("lists tailnet peers that answer as T3 servers", () => {
+it.effect("lists the owner's tailnet machines that answer as T3 servers", () => {
   const { probed, layer } = makeHarness(
     {
       running: true,
@@ -102,6 +106,10 @@ it.effect("lists tailnet peers that answer as T3 servers", () => {
         node("noaddress", "100.64.0.10", { tailnetIpv4Addresses: [] }),
         node("twin", "100.64.0.6"),
         node("silent", "100.64.0.11", { magicDnsName: null }),
+        // Someone else's server, or one belonging to tags, is not the owner's to add.
+        node("stranger", "100.64.0.12", { userId: 2, loginName: "mallory@github" }),
+        node("otherTailnet", "100.64.0.13", { userId: 3 }),
+        node("builder", "100.64.0.14", { tagged: true, loginName: null }),
       ],
     },
     {
@@ -112,6 +120,8 @@ it.effect("lists tailnet peers that answer as T3 servers", () => {
         "Alpha",
       ),
       "https://twin.tail.ts.net/.well-known/t3/environment": descriptor(OWN_ENVIRONMENT_ID, "Me"),
+      "https://stranger.tail.ts.net/.well-known/t3/environment": descriptor("env-x", "Pulsar"),
+      "https://builder.tail.ts.net/.well-known/t3/environment": descriptor("env-y", "Builder"),
     },
   );
 
@@ -157,6 +167,32 @@ it.effect("lists tailnet peers that answer as T3 servers", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("a tagged machine lists only the configured login's machines", () => {
+  const tailnet = {
+    running: true,
+    self: node("vps", "100.64.0.1", { tagged: true, loginName: null, userId: 9 }),
+    peers: [
+      node("laptop", "100.64.0.2"),
+      node("stranger", "100.64.0.3", { userId: 2, loginName: "mallory@github" }),
+    ],
+  };
+  const answers = {
+    "https://laptop.tail.ts.net/.well-known/t3/environment": descriptor("env-l", "Laptop"),
+    "https://stranger.tail.ts.net/.well-known/t3/environment": descriptor("env-s", "Stranger"),
+  };
+  return Effect.gen(function* () {
+    const configured = makeHarness(tailnet, answers, "Owner@GitHub");
+    const listed = yield* peers.pipe(Effect.provide(configured.layer));
+    assert.deepEqual(
+      listed.peers.map((peer) => peer.name),
+      ["laptop"],
+    );
+    const unconfigured = makeHarness(tailnet, answers);
+    assert.deepEqual((yield* peers.pipe(Effect.provide(unconfigured.layer))).peers, []);
+    assert.deepEqual(unconfigured.probed, []);
+  });
+});
+
 it.effect("reports Tailscale as unavailable without probing", () => {
   const { probed, layer } = makeHarness(null, {});
   return Effect.gen(function* () {
@@ -167,7 +203,7 @@ it.effect("reports Tailscale as unavailable without probing", () => {
 
 it.effect("reuses a recent result instead of probing again", () => {
   const { probed, layer } = makeHarness(
-    { running: true, self: null, peers: [node("beta", "100.64.0.4")] },
+    { running: true, self: node("pulsar", "100.64.0.1"), peers: [node("beta", "100.64.0.4")] },
     {},
   );
   return Effect.gen(function* () {

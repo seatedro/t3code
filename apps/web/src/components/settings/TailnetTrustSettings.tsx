@@ -1,7 +1,7 @@
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
+import { requiredScopesForServerSettingsPatch } from "@t3tools/contracts";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
-import { useEnvironmentScope } from "../../state/session";
+import { useEnvironmentScopes } from "../../state/session";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
@@ -14,7 +14,11 @@ export function TailnetTrustSettings() {
   const login = usePrimarySettings((settings) => settings.tailnetTrustLogin);
   const updateSettings = useUpdatePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const canWrite = useEnvironmentScope(primaryEnvironmentId, AuthSettingsWriteScope);
+  // Whoever sets these decides who gets a full session without a code, so it takes a full session.
+  const canWrite = useEnvironmentScopes(
+    primaryEnvironmentId,
+    requiredScopesForServerSettingsPatch({ tailnetTrustEnabled: true }),
+  );
 
   return (
     <>

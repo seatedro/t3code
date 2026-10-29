@@ -4,6 +4,7 @@ import {
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  AuthStandardClientScopes,
   AuthAccessWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
@@ -262,6 +263,42 @@ describe("settings mutation authorization", () => {
       ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
       expect(handled).toBe(2);
     }),
+  );
+
+  it.effect.each([
+    { patch: { tailnetTrustEnabled: true }, scopes: [AuthSettingsWriteScope] },
+    {
+      patch: { tailnetTrustLogin: "mallory@github" },
+      scopes: [AuthSettingsWriteScope, AuthAccessWriteScope],
+    },
+    {
+      patch: { tailnetTrustEnabled: true },
+      scopes: AuthStandardClientScopes.filter((scope) => scope !== AuthTerminalOperateScope),
+    },
+  ])(
+    "lets only a full standard client change who gets in without a code ($patch)",
+    ({ patch, scopes }) =>
+      Effect.gen(function* () {
+        let handled = 0;
+        const handler = group.toLayerHandler(WS_METHODS.serverUpdateSettings, () =>
+          Effect.sync(() => {
+            handled++;
+            return DEFAULT_SERVER_SETTINGS;
+          }),
+        );
+        const narrow = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(Layer.mergeAll(handler, RpcAuthorization.layer(scopes))),
+        );
+        expect(
+          yield* narrow[WS_METHODS.serverUpdateSettings]({ patch }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "EnvironmentAuthorizationError" });
+        expect(handled).toBe(0);
+        const full = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(Layer.mergeAll(handler, RpcAuthorization.layer(AuthStandardClientScopes))),
+        );
+        yield* full[WS_METHODS.serverUpdateSettings]({ patch });
+        expect(handled).toBe(1);
+      }),
   );
 
   it.effect(
