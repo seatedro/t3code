@@ -166,6 +166,38 @@ export const bootstrapRemoteBearerSession = Effect.fn(
   );
 });
 
+/** A session without a pairing code, which the server grants only to its owner's tailnet devices. */
+export const requestRemoteTailnetSession = Effect.fn(
+  "clientRuntime.authorization.requestRemoteTailnetSession",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly clientMetadata?: AuthClientPresentationMetadata;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "auth");
+  return yield* executeEnvironmentHttpRequest(
+    environmentEndpointUrl(input.httpBaseUrl, "/api/auth/tailnet-session"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.tailnetSession({ payload: clientMetadataTokenExchangeFields(input.clientMetadata) }),
+  );
+});
+
+/** @public Flock mobile, outside this repo, lists tailnet machines with it. */
+export const fetchRemoteTailnetPeers = Effect.fn(
+  "clientRuntime.authorization.fetchRemoteTailnetPeers",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly bearerToken: string;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "tailnet");
+  return yield* executeEnvironmentHttpRequest(
+    environmentEndpointUrl(input.httpBaseUrl, "/api/tailnet/peers"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.peers({ headers: { authorization: `Bearer ${input.bearerToken}` } }),
+  );
+});
+
 export const fetchRemoteSessionState = Effect.fn(
   "clientRuntime.authorization.fetchRemoteSessionState",
 )(function* (input: {

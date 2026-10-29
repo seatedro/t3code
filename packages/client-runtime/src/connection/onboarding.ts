@@ -1,4 +1,8 @@
-import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -8,7 +12,11 @@ import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/http/HttpClient";
 
-import { bootstrapRemoteBearerSession } from "../authorization/remote.ts";
+import {
+  bootstrapRemoteBearerSession,
+  type RemoteEnvironmentAuthError,
+  requestRemoteTailnetSession,
+} from "../authorization/remote.ts";
 import { deriveWsBaseUrl, normalizeHttpBaseUrl } from "../environment/endpoint.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -26,6 +34,7 @@ import { mapRemoteEnvironmentError } from "./errors.ts";
 import {
   BearerConnectionTarget,
   ConnectionBlockedError,
+  ConnectionTransientError,
   SshConnectionTarget,
   type ConnectionAttemptError,
 } from "./model.ts";
@@ -38,6 +47,12 @@ export interface PairingConnectionInput {
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
+  readonly expectedEnvironmentId?: EnvironmentId;
+}
+
+export interface TailnetConnectionInput {
+  /** A machine name, MagicDNS name, tailnet IP, or URL. */
+  readonly address: string;
   readonly expectedEnvironmentId?: EnvironmentId;
 }
 
@@ -58,6 +73,12 @@ export class ConnectionOnboarding extends Context.Service<
   {
     readonly registerPairing: (
       input: PairingConnectionInput,
+    ) => Effect.Effect<
+      EnvironmentId,
+      ConnectionAttemptError | Persistence.ConnectionPersistenceError
+    >;
+    readonly registerTailnet: (
+      input: TailnetConnectionInput,
     ) => Effect.Effect<
       EnvironmentId,
       ConnectionAttemptError | Persistence.ConnectionPersistenceError
@@ -98,6 +119,50 @@ function differentMachineError(label: string) {
   });
 }
 
+/** Everything checked before a credential is spent, in the order a wrong machine is refused. */
+const prepareBearerRoute = Effect.fn("clientRuntime.connection.onboarding.prepareBearerRoute")(
+  function* (input: {
+    readonly descriptor: ExecutionEnvironmentDescriptor;
+    readonly httpBaseUrl: string;
+    readonly wsBaseUrl: string;
+    readonly expectedEnvironmentId: EnvironmentId | undefined;
+  }) {
+    const descriptor = input.descriptor;
+    if (
+      input.expectedEnvironmentId !== undefined &&
+      descriptor.environmentId !== input.expectedEnvironmentId
+    ) {
+      return yield* differentMachineError(descriptor.label);
+    }
+    const connectionId = bearerConnectionId(descriptor.environmentId, input.httpBaseUrl);
+    const route = {
+      target: new BearerConnectionTarget({
+        environmentId: descriptor.environmentId,
+        label: descriptor.label,
+        connectionId,
+      }),
+      profile: new BearerConnectionProfile({
+        connectionId,
+        environmentId: descriptor.environmentId,
+        label: descriptor.label,
+        httpBaseUrl: input.httpBaseUrl,
+        wsBaseUrl: input.wsBaseUrl,
+      }),
+    };
+    // The registry checks again under its lease; this early check keeps a refused code unspent.
+    if (input.expectedEnvironmentId === undefined) {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* registry.assertKnownAddress({ ...route, profile: Option.some(route.profile) });
+    }
+    const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
+    // An outdated server is still saved so it can be updated from this client.
+    if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
+      return yield* compatibilityError;
+    }
+    return route;
+  },
+);
+
 export const preparePairingRegistration = Effect.fn(
   "clientRuntime.connection.onboarding.preparePairingRegistration",
 )(function* (input: PairingConnectionInput) {
@@ -106,38 +171,12 @@ export const preparePairingRegistration = Effect.fn(
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: target.httpBaseUrl,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
-  // Checked before redeeming the one-time code, so a wrong link is not spent.
-  if (
-    input.expectedEnvironmentId !== undefined &&
-    descriptor.environmentId !== input.expectedEnvironmentId
-  ) {
-    return yield* differentMachineError(descriptor.label);
-  }
-  const connectionId = bearerConnectionId(descriptor.environmentId, target.httpBaseUrl);
-  const route = {
-    target: new BearerConnectionTarget({
-      environmentId: descriptor.environmentId,
-      label: descriptor.label,
-      connectionId,
-    }),
-    profile: new BearerConnectionProfile({
-      connectionId,
-      environmentId: descriptor.environmentId,
-      label: descriptor.label,
-      httpBaseUrl: target.httpBaseUrl,
-      wsBaseUrl: target.wsBaseUrl,
-    }),
-  };
-  // The registry checks again under its lease; this early check keeps a refused code unspent.
-  if (input.expectedEnvironmentId === undefined) {
-    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-    yield* registry.assertKnownAddress({ ...route, profile: Option.some(route.profile) });
-  }
-  const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
-  // An outdated server is still saved so it can be updated from this client.
-  if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
-    return yield* compatibilityError;
-  }
+  const route = yield* prepareBearerRoute({
+    descriptor,
+    httpBaseUrl: target.httpBaseUrl,
+    wsBaseUrl: target.wsBaseUrl,
+    expectedEnvironmentId: input.expectedEnvironmentId,
+  });
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
@@ -152,12 +191,121 @@ export const preparePairingRegistration = Effect.fn(
   });
 });
 
-const registerPairingConnection = Effect.fn(
-  "clientRuntime.connection.onboarding.registerPairingConnection",
-)(function* (input: PairingConnectionInput) {
-  const registration = yield* preparePairingRegistration(input);
+const TAILSCALE_HOST_SUFFIX = ".ts.net";
+const T3_DEFAULT_PORT = 3773;
+const TAILNET_PROBE_TIMEOUT_MS = 4_000;
+
+/**
+ * Where a typed machine name, MagicDNS name, or tailnet IP may answer, most likely first.
+ * `tailscale serve` publishes `*.ts.net` over HTTPS; a bare name or IP is usually T3 Code
+ * itself on its default port.
+ */
+export function tailnetCandidateBaseUrls(address: string): ReadonlyArray<string> {
+  const trimmed = address.trim().replace(/\/+$/, "");
+  if (trimmed === "") return [];
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)) {
+    try {
+      return [normalizeHttpBaseUrl(trimmed)];
+    } catch {
+      return [];
+    }
+  }
+  if (!URL.canParse(`http://${trimmed}`)) return [];
+  const url = new URL(`http://${trimmed}`);
+  const host = url.hostname;
+  // Read from what was typed: `URL` drops `:80` as http's default.
+  const port = /^(?:\[[^\]]*\]|[^:/]*):(\d+)(?:\/|$)/.exec(trimmed)?.[1];
+  const tailscaleName = host.endsWith(TAILSCALE_HOST_SUFFIX);
+  if (port !== undefined) {
+    return [tailscaleName && port === "443" ? `https://${host}/` : `http://${host}:${port}/`];
+  }
+  const https = `https://${host}/`;
+  const direct = `http://${host}:${T3_DEFAULT_PORT}/`;
+  return tailscaleName ? [https, direct] : [direct, https];
+}
+
+const probeTailnetAddress = Effect.fn("clientRuntime.connection.onboarding.probeTailnetAddress")(
+  function* (address: string) {
+    const candidates = tailnetCandidateBaseUrls(address);
+    if (candidates.length === 0) {
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "Enter a machine name or address.",
+      });
+    }
+    for (const httpBaseUrl of candidates) {
+      const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl,
+        timeoutMs: TAILNET_PROBE_TIMEOUT_MS,
+      }).pipe(Effect.option);
+      if (Option.isSome(descriptor)) {
+        return { httpBaseUrl, descriptor: descriptor.value };
+      }
+    }
+    return yield* new ConnectionTransientError({
+      reason: "network",
+      detail: `Couldn't reach ${address.trim()}. Check that Tailscale is on and T3 Code is running there.`,
+      hop: "server",
+      via: "direct",
+    });
+  },
+);
+
+function mapTailnetSessionError(label: string) {
+  return (error: RemoteEnvironmentAuthError): ConnectionAttemptError => {
+    if (error._tag === "EnvironmentOperationForbiddenError") {
+      return new ConnectionBlockedError({
+        reason: "permission",
+        detail:
+          error.reason === "tailnet_trust_disabled"
+            ? `Turn on "Trust my Tailscale devices" on ${label}, or enter a pairing code.`
+            : `${label} doesn't recognize this device as yours on Tailscale. Enter a pairing code.`,
+        traceId: error.traceId,
+        hop: "server",
+        via: "direct",
+      });
+    }
+    if (error._tag === "RemoteEnvironmentAuthUndeclaredStatusError" && error.status === 404) {
+      return new ConnectionBlockedError({
+        reason: "unsupported",
+        detail: `${label} needs an update to connect without a code. Enter a pairing code.`,
+        hop: "server",
+        via: "direct",
+      });
+    }
+    return mapRemoteEnvironmentError(error);
+  };
+}
+
+export const prepareTailnetRegistration = Effect.fn(
+  "clientRuntime.connection.onboarding.prepareTailnetRegistration",
+)(function* (input: TailnetConnectionInput) {
+  const { httpBaseUrl, descriptor } = yield* probeTailnetAddress(input.address);
+  const presentation = yield* ClientCapabilities.ClientPresentation;
+  const route = yield* prepareBearerRoute({
+    descriptor,
+    httpBaseUrl,
+    wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+    expectedEnvironmentId: input.expectedEnvironmentId,
+  });
+  const access = yield* requestRemoteTailnetSession({
+    httpBaseUrl,
+    clientMetadata: presentation.metadata,
+  }).pipe(Effect.mapError(mapTailnetSessionError(descriptor.label)));
+  return new BearerConnectionRegistration({
+    ...route,
+    credential: new BearerConnectionCredential({ token: access.access_token }),
+  });
+});
+
+const saveBearerRegistration = Effect.fn(
+  "clientRuntime.connection.onboarding.saveBearerRegistration",
+)(function* (
+  registration: BearerConnectionRegistration,
+  expectedEnvironmentId: EnvironmentId | undefined,
+) {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  const knownAddressOnly = input.expectedEnvironmentId === undefined;
+  const knownAddressOnly = expectedEnvironmentId === undefined;
   if (!(yield* registry.register(registration, { knownAddressOnly }))) {
     return registration.target.environmentId;
   }
@@ -166,6 +314,20 @@ const registerPairingConnection = Effect.fn(
     .setEnabled(registration.target.environmentId, true)
     .pipe(Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }));
   return registration.target.environmentId;
+});
+
+const registerPairingConnection = Effect.fn(
+  "clientRuntime.connection.onboarding.registerPairingConnection",
+)(function* (input: PairingConnectionInput) {
+  const registration = yield* preparePairingRegistration(input);
+  return yield* saveBearerRegistration(registration, input.expectedEnvironmentId);
+});
+
+const registerTailnetConnection = Effect.fn(
+  "clientRuntime.connection.onboarding.registerTailnetConnection",
+)(function* (input: TailnetConnectionInput) {
+  const registration = yield* prepareTailnetRegistration(input);
+  return yield* saveBearerRegistration(registration, input.expectedEnvironmentId);
 });
 
 const isBearerCredential = Schema.is(BearerConnectionCredential);
@@ -310,6 +472,14 @@ export const make = Effect.gen(function* () {
     registerPairing: Effect.fnUntraced(
       function* (input) {
         return yield* registerPairingConnection(input);
+      },
+      Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
+      Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    ),
+    registerTailnet: Effect.fnUntraced(
+      function* (input) {
+        return yield* registerTailnetConnection(input);
       },
       Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
       Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
