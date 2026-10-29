@@ -1310,6 +1310,13 @@ export const ServerSettings = Schema.Struct({
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Fork: agents on this machine get the `memory` tool. Off keeps the memories but hides the tool. */
   memoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Devices signed in to this machine's Tailscale account connect over the tailnet without a
+   * pairing code. Off refuses them and revokes the sessions they were given.
+   */
+  tailnetTrustEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** The login a tagged machine trusts; a machine with a user always trusts its own login. */
+  tailnetTrustLogin: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1666,6 +1673,8 @@ export const ServerSettingsPatch = Schema.Struct({
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
+  tailnetTrustEnabled: Schema.optionalKey(Schema.Boolean),
+  tailnetTrustLogin: Schema.optionalKey(TrimmedString),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

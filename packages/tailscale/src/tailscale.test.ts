@@ -12,8 +12,11 @@ import {
   parseTailscaleExitNode,
   parseTailscaleSshEnabled,
   parseTailscaleStatus,
+  parseTailscaleTailnet,
+  parseTailscaleWhois,
   readTailscaleSshEnabled,
   readTailscaleStatus,
+  readTailscaleWhois,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
   TailscaleStatusParseError,
@@ -93,6 +96,47 @@ function layerMockSpawner(
   );
 }
 
+const OWNER_ID = 7478531525256488;
+const TAGGED_DEVICES_ID = 343712290915616;
+const tailnetUsers = {
+  [String(OWNER_ID)]: { ID: OWNER_ID, LoginName: "seatedro@github" },
+  [String(TAGGED_DEVICES_ID)]: { ID: TAGGED_DEVICES_ID, LoginName: "tagged-devices" },
+};
+const pulsarStatusNode = {
+  ID: "nLppMTC8Q711CNTRL",
+  HostName: "pulsar",
+  DNSName: "pulsar.tail87c919.ts.net.",
+  OS: "linux",
+  UserID: OWNER_ID,
+  TailscaleIPs: ["100.84.4.32", "fd7a:115c:a1e0::5a29:421"],
+  Tags: null,
+  Online: true,
+};
+const pulsarNode = {
+  stableId: "nLppMTC8Q711CNTRL",
+  name: "pulsar",
+  magicDnsName: "pulsar.tail87c919.ts.net",
+  os: "linux",
+  userId: OWNER_ID,
+  loginName: "seatedro@github",
+  tagged: false,
+  tailnetIpv4Addresses: ["100.84.4.32"],
+  online: true,
+  sharee: false,
+};
+const macbookWhois = {
+  Node: {
+    ID: 6140258256360914,
+    StableID: "n5xhnzAwwp11CNTRL",
+    Name: "macbook.tail87c919.ts.net.",
+    ComputedName: "macbook",
+    User: OWNER_ID,
+    Tags: null,
+    Hostinfo: { OS: "macOS" },
+  },
+  UserProfile: { ID: OWNER_ID, LoginName: "seatedro@github", DisplayName: "rohit" },
+};
+
 describe("tailscale", () => {
   it.effect("parses status facts", () =>
     Effect.gen(function* () {
@@ -138,6 +182,172 @@ describe("tailscale", () => {
 
       const disabled = yield* parseTailscaleStatus(`{"Self":{"CapMap":{"funnel":null}}}`);
       assert.equal(disabled.httpsServeEnabled, false);
+    }),
+  );
+
+  it.effect("parses the tailnet from status", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* parseTailscaleTailnet(
+        JSON.stringify({
+          BackendState: "Running",
+          Self: pulsarStatusNode,
+          Peer: {
+            "nodekey:tagged": {
+              ID: "nTagged",
+              HostName: "builder",
+              DNSName: "builder.tail87c919.ts.net.",
+              OS: "linux",
+              UserID: TAGGED_DEVICES_ID,
+              TailscaleIPs: ["100.70.0.2/32", "fd7a:115c:a1e0::2"],
+              Tags: ["tag:codex-target"],
+              Online: false,
+            },
+            "nodekey:sharee": {
+              ID: "nSharee",
+              HostName: "Friend's Mac",
+              OS: "macOS",
+              UserID: 99,
+              TailscaleIPs: ["fd7a:115c:a1e0::3"],
+              Online: true,
+              ShareeNode: true,
+            },
+          },
+          User: tailnetUsers,
+        }),
+      );
+      assert.deepEqual(tailnet, {
+        running: true,
+        self: pulsarNode,
+        peers: [
+          {
+            stableId: "nTagged",
+            name: "builder",
+            magicDnsName: "builder.tail87c919.ts.net",
+            os: "linux",
+            userId: TAGGED_DEVICES_ID,
+            loginName: null,
+            tagged: true,
+            tailnetIpv4Addresses: ["100.70.0.2"],
+            online: false,
+            sharee: false,
+          },
+          {
+            stableId: "nSharee",
+            name: "Friend's Mac",
+            magicDnsName: null,
+            os: "macOS",
+            userId: 99,
+            loginName: null,
+            tagged: false,
+            tailnetIpv4Addresses: [],
+            online: true,
+            sharee: true,
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("parses a tailnet that is not running or sparse", () =>
+    Effect.gen(function* () {
+      for (const [statusJson, expected] of [
+        [
+          { BackendState: "NeedsLogin", Self: pulsarStatusNode, User: tailnetUsers },
+          { running: false, self: pulsarNode, peers: [] },
+        ],
+        [{}, { running: false, self: null, peers: [] }],
+        [
+          { BackendState: "Running", Self: {} },
+          {
+            running: true,
+            self: {
+              stableId: null,
+              name: null,
+              magicDnsName: null,
+              os: null,
+              userId: null,
+              loginName: null,
+              tagged: false,
+              tailnetIpv4Addresses: [],
+              online: false,
+              sharee: false,
+            },
+            peers: [],
+          },
+        ],
+        // A user id missing from the User map leaves the login unknown.
+        [
+          { BackendState: "Running", Self: pulsarStatusNode },
+          { running: true, self: { ...pulsarNode, loginName: null }, peers: [] },
+        ],
+      ] as const) {
+        assert.deepEqual(yield* parseTailscaleTailnet(JSON.stringify(statusJson)), expected);
+      }
+      const error = yield* parseTailscaleTailnet("{not-json").pipe(Effect.flip);
+      assert.instanceOf(error, TailscaleStatusParseError);
+    }),
+  );
+
+  it.effect("parses whois identities", () =>
+    Effect.gen(function* () {
+      const macbook = {
+        stableId: "n5xhnzAwwp11CNTRL",
+        name: "macbook",
+        magicDnsName: "macbook.tail87c919.ts.net",
+        os: "macOS",
+        userId: OWNER_ID,
+        loginName: "seatedro@github",
+        tagged: false,
+        shared: false,
+      };
+      for (const [whoisJson, expected] of [
+        [macbookWhois, macbook],
+        [{ ...macbookWhois, Node: { ...macbookWhois.Node, Sharer: 0 } }, macbook],
+        [
+          { ...macbookWhois, Node: { ...macbookWhois.Node, Sharer: 12345 } },
+          { ...macbook, shared: true },
+        ],
+        [
+          {
+            Node: {
+              ...macbookWhois.Node,
+              User: TAGGED_DEVICES_ID,
+              Tags: ["tag:codex-target"],
+            },
+            UserProfile: { ID: TAGGED_DEVICES_ID, LoginName: "tagged-devices" },
+          },
+          { ...macbook, userId: TAGGED_DEVICES_ID, loginName: null, tagged: true },
+        ],
+        [
+          { ...macbookWhois, UserProfile: { ...macbookWhois.UserProfile, ID: 1 } },
+          { ...macbook, loginName: null },
+        ],
+        [{ Node: macbookWhois.Node }, { ...macbook, loginName: null }],
+      ] as const) {
+        assert.deepEqual(yield* parseTailscaleWhois(JSON.stringify(whoisJson)), expected);
+      }
+    }),
+  );
+
+  it.effect("reads whois and treats an unknown peer as null", () =>
+    Effect.gen(function* () {
+      const known = layerMockSpawner((command, args) => {
+        assert.equal(command, "tailscale");
+        assert.deepEqual(args, ["whois", "--json", "100.101.0.7"]);
+        return { stdout: JSON.stringify(macbookWhois) };
+      });
+      const whois = yield* readTailscaleWhois("100.101.0.7").pipe(Effect.provide(known));
+      assert.equal(whois?.loginName, "seatedro@github");
+
+      const unknown = layerMockSpawner(() => ({ code: 1, stderr: "peer not found\n" }));
+      assert.equal(yield* readTailscaleWhois("100.101.0.8").pipe(Effect.provide(unknown)), null);
+
+      const failing = layerMockSpawner(() => ({ code: 1, stderr: "not logged in" }));
+      const error = yield* readTailscaleWhois("100.101.0.8").pipe(
+        Effect.flip,
+        Effect.provide(failing),
+      );
+      assert.instanceOf(error, TailscaleCommandExitError);
     }),
   );
 

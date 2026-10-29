@@ -33,6 +33,7 @@ import {
   AuthEnvironmentScope,
   AuthTokenExchangeRequest,
   AuthSessionState,
+  AuthTailnetSessionRequest,
   AuthWebSocketTicketParams,
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
@@ -56,6 +57,7 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import { TailnetPeersResult } from "./tailnet.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -104,6 +106,10 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  /** This environment does not let tailnet devices in without a pairing code. */
+  "tailnet_trust_disabled",
+  /** The connection did not come over the tailnet from a device of the trusted account. */
+  "tailnet_device_not_trusted",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -339,6 +345,15 @@ const EnvironmentTokenExchangeErrors = [
   EnvironmentAuthInvalidError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentTailnetSessionErrors = [
+  EnvironmentOperationForbiddenError,
+  EnvironmentInternalError,
+] as const;
+const EnvironmentTailnetPeersErrors = [
+  EnvironmentAuthInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentScopedOperationErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -555,6 +570,13 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }),
   )
   .add(
+    HttpApiEndpoint.post("tailnetSession", "/api/auth/tailnet-session", {
+      payload: AuthTailnetSessionRequest,
+      success: AuthAccessTokenResult,
+      error: EnvironmentTailnetSessionErrors,
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("webSocketTicket", "/api/auth/websocket-ticket", {
       headers: OptionalBearerHeaders,
       success: AuthWebSocketTicketResult,
@@ -600,6 +622,15 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
+
+/** Authenticates in its handler: a tailnet device the environment trusts may list without a session. */
+class EnvironmentTailnetHttpApi extends HttpApiGroup.make("tailnet").add(
+  HttpApiEndpoint.get("peers", "/api/tailnet/peers", {
+    headers: OptionalBearerHeaders,
+    success: TailnetPeersResult,
+    error: EnvironmentTailnetPeersErrors,
+  }),
+) {}
 
 class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")
   .add(
@@ -838,6 +869,7 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
+  .add(EnvironmentTailnetHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)

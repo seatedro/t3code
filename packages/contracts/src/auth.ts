@@ -228,6 +228,17 @@ export const AuthTokenExchangeRequest = Schema.Struct({
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
 
+/**
+ * Asks for a session without a pairing code. The environment decides from the Tailscale
+ * identity of the connection, never from these fields, which only label the session.
+ */
+export const AuthTailnetSessionRequest = Schema.Struct({
+  client_label: Schema.optionalKey(TrimmedNonEmptyString),
+  client_device_type: Schema.optionalKey(AuthClientMetadataDeviceType),
+  client_os: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type AuthTailnetSessionRequest = typeof AuthTailnetSessionRequest.Type;
+
 export const AuthAccessTokenResult = Schema.Struct({
   access_token: TrimmedNonEmptyString,
   issued_token_type: Schema.Literal(AuthAccessTokenType),

@@ -24,6 +24,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
+import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";
 class AuthTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth) {}
@@ -49,6 +50,17 @@ const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
 );
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
+  Layer.provide(
+    Layer.mock(TailnetTrust.TailnetTrust)({
+      issueSession: () =>
+        Effect.fail(
+          new TailnetTrust.TailnetTrustRefusedError({
+            reason: "tailnet_trust_disabled",
+            detail: "setting_off",
+          }),
+        ),
+    }),
+  ),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
   Layer.provideMerge(layerEnvironmentAuth),
   Layer.provide(layerConfig),
@@ -112,6 +124,16 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           );
           expect(retiredScopeResponse.status).toBe(400);
           expect(await retiredScopeResponse.json()).toMatchObject({ reason: "invalid_scope" });
+
+          const tailnetResponse = await environmentA.handler(
+            postJson("/api/auth/tailnet-session", { client_label: "Flock" }),
+            requestContext,
+          );
+          expect(tailnetResponse.status).toBe(403);
+          expect(await tailnetResponse.json()).toMatchObject({
+            code: "operation_forbidden",
+            reason: "tailnet_trust_disabled",
+          });
 
           const devCookies = devResponse.headers.getSetCookie();
           const devCookie = devCookies.find((cookie) => cookie.startsWith("t3_dev_session_"));

@@ -30,7 +30,7 @@ const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "
 
 const TailscaleCommandContext = {
   executable: Schema.Literals(["tailscale", "tailscale.exe"]),
-  subcommand: Schema.Literals(["status", "serve", "debug"]),
+  subcommand: Schema.Literals(["status", "serve", "debug", "whois"]),
   argumentCount: Schema.Number,
 };
 
@@ -41,6 +41,7 @@ const TailscaleCommandContext = {
  */
 export const TailscaleStderrDiagnostic = Schema.Literals([
   "no-existing-handler",
+  "peer-not-found",
   "not-logged-in",
   "permission-denied",
   "unknown",
@@ -51,6 +52,7 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   readonly [RegExp, Exclude<TailscaleStderrDiagnostic, "unknown">]
 > = [
   [/handler does not exist/i, "no-existing-handler"],
+  [/peer not found|no match for IP/i, "peer-not-found"],
   [/not logged in|logged out|needs? login/i, "not-logged-in"],
   [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
 ];
@@ -222,7 +224,7 @@ export const parseTailscaleStatus = (
   );
 
 const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function* (
-  subcommand: "status" | "debug",
+  subcommand: "status" | "debug" | "whois",
   args: readonly string[],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -287,6 +289,177 @@ const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function*
 export const readTailscaleStatus = readTailscaleOutput("status", ["status", "--json"]).pipe(
   Effect.flatMap(parseTailscaleStatus),
 );
+
+const TailscaleNodeStatusJson = Schema.Struct({
+  ID: Schema.optional(Schema.Unknown),
+  HostName: Schema.optional(Schema.Unknown),
+  DNSName: Schema.optional(Schema.Unknown),
+  OS: Schema.optional(Schema.Unknown),
+  UserID: Schema.optional(Schema.Unknown),
+  TailscaleIPs: Schema.optional(Schema.Unknown),
+  Tags: Schema.optional(Schema.Unknown),
+  Online: Schema.optional(Schema.Unknown),
+  ShareeNode: Schema.optional(Schema.Unknown),
+});
+
+const TailscaleTailnetJson = Schema.Struct({
+  BackendState: Schema.optional(Schema.Unknown),
+  Self: Schema.optional(TailscaleNodeStatusJson),
+  Peer: Schema.optional(Schema.Record(Schema.String, TailscaleNodeStatusJson)),
+  User: Schema.optional(
+    Schema.Record(Schema.String, Schema.Struct({ LoginName: Schema.optional(Schema.Unknown) })),
+  ),
+});
+
+const decodeTailscaleTailnetJson = Schema.decodeEffect(Schema.fromJsonString(TailscaleTailnetJson));
+
+export interface TailscaleNode {
+  readonly stableId: string | null;
+  /** The tailnet machine name: the first label of its MagicDNS name. */
+  readonly name: string | null;
+  readonly magicDnsName: string | null;
+  readonly os: string | null;
+  readonly userId: number | null;
+  /** Null for a tagged node, which belongs to its tags rather than to a user. */
+  readonly loginName: string | null;
+  readonly tagged: boolean;
+  readonly tailnetIpv4Addresses: readonly string[];
+  readonly online: boolean;
+  /** A device of someone this machine is shared with, not a member of its tailnet. */
+  readonly sharee: boolean;
+}
+
+export interface TailscaleTailnet {
+  readonly running: boolean;
+  readonly self: TailscaleNode | null;
+  readonly peers: readonly TailscaleNode[];
+}
+
+const nonEmptyString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+
+const normalizeDnsName = (value: unknown): string | null =>
+  nonEmptyString(typeof value === "string" ? value.replace(/\.$/u, "") : value);
+
+const hasTags = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
+
+const tailnetIpv4AddressesOf = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((address) => (typeof address === "string" ? (address.split("/")[0] ?? "") : ""))
+        .filter(isTailscaleIpv4Address)
+    : [];
+
+function toTailscaleNode(
+  node: typeof TailscaleNodeStatusJson.Type,
+  users: Readonly<Record<string, { readonly LoginName?: unknown }>>,
+): TailscaleNode {
+  const magicDnsName = normalizeDnsName(node.DNSName);
+  const tagged = hasTags(node.Tags);
+  const userId = typeof node.UserID === "number" ? node.UserID : null;
+  return {
+    stableId: nonEmptyString(node.ID),
+    name: nonEmptyString(magicDnsName?.split(".")[0]) ?? nonEmptyString(node.HostName),
+    magicDnsName,
+    os: nonEmptyString(node.OS),
+    userId,
+    loginName: tagged || userId === null ? null : nonEmptyString(users[String(userId)]?.LoginName),
+    tagged,
+    tailnetIpv4Addresses: tailnetIpv4AddressesOf(node.TailscaleIPs),
+    online: node.Online === true,
+    sharee: node.ShareeNode === true,
+  };
+}
+
+export const parseTailscaleTailnet = (
+  rawStatusJson: string,
+): Effect.Effect<TailscaleTailnet, TailscaleStatusParseError> =>
+  decodeTailscaleTailnetJson(rawStatusJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((parsed) => {
+      const users = parsed.User ?? {};
+      return {
+        running: parsed.BackendState === "Running",
+        self: parsed.Self === undefined ? null : toTailscaleNode(parsed.Self, users),
+        peers: Object.values(parsed.Peer ?? {}).map((peer) => toTailscaleNode(peer, users)),
+      };
+    }),
+  );
+
+export const readTailscaleTailnet = readTailscaleOutput("status", ["status", "--json"]).pipe(
+  Effect.flatMap(parseTailscaleTailnet),
+);
+
+const TailscaleWhoisJson = Schema.Struct({
+  Node: Schema.Struct({
+    StableID: Schema.optional(Schema.Unknown),
+    Name: Schema.optional(Schema.Unknown),
+    ComputedName: Schema.optional(Schema.Unknown),
+    User: Schema.optional(Schema.Unknown),
+    Sharer: Schema.optional(Schema.Unknown),
+    Tags: Schema.optional(Schema.Unknown),
+    Hostinfo: Schema.optional(Schema.Struct({ OS: Schema.optional(Schema.Unknown) })),
+  }),
+  UserProfile: Schema.optional(
+    Schema.Struct({
+      ID: Schema.optional(Schema.Unknown),
+      LoginName: Schema.optional(Schema.Unknown),
+    }),
+  ),
+});
+
+const decodeTailscaleWhoisJson = Schema.decodeEffect(Schema.fromJsonString(TailscaleWhoisJson));
+
+/** Who tailscaled says is on the other end of a tailnet address. */
+export interface TailscaleWhois {
+  readonly stableId: string | null;
+  readonly name: string | null;
+  readonly magicDnsName: string | null;
+  readonly os: string | null;
+  readonly userId: number | null;
+  /** Null for a tagged node, whose profile is the shared "tagged-devices" one. */
+  readonly loginName: string | null;
+  readonly tagged: boolean;
+  /** Shared into this tailnet by someone, so it belongs to another tailnet. */
+  readonly shared: boolean;
+}
+
+export const parseTailscaleWhois = (
+  rawWhoisJson: string,
+): Effect.Effect<TailscaleWhois, TailscaleStatusParseError> =>
+  decodeTailscaleWhoisJson(rawWhoisJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map(({ Node: node, UserProfile: profile }) => {
+      const magicDnsName = normalizeDnsName(node.Name);
+      const tagged = hasTags(node.Tags);
+      const userId = typeof node.User === "number" ? node.User : null;
+      return {
+        stableId: nonEmptyString(node.StableID),
+        name: nonEmptyString(node.ComputedName) ?? nonEmptyString(magicDnsName?.split(".")[0]),
+        magicDnsName,
+        os: nonEmptyString(node.Hostinfo?.OS),
+        userId,
+        loginName:
+          !tagged && userId !== null && profile !== undefined && profile.ID === userId
+            ? nonEmptyString(profile.LoginName)
+            : null,
+        tagged,
+        // A zero or absent Sharer means the node is the tailnet's own.
+        shared: node.Sharer !== undefined && node.Sharer !== null && node.Sharer !== 0,
+      };
+    }),
+  );
+
+/** Null when tailscaled knows no node at that address. */
+export const readTailscaleWhois = (address: string) =>
+  readTailscaleOutput("whois", ["whois", "--json", address]).pipe(
+    Effect.flatMap(parseTailscaleWhois),
+    Effect.catchIf(
+      (error) =>
+        error._tag === "TailscaleCommandExitError" && error.stderrDiagnostic === "peer-not-found",
+      () => Effect.succeed(null),
+    ),
+  );
 
 const TailscaleExitNodeJson = Schema.Struct({
   ExitNodeStatus: Schema.optional(Schema.Struct({ Online: Schema.optional(Schema.Unknown) })),

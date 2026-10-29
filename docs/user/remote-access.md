@@ -171,6 +171,29 @@ tailscale serve --https=443 off
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
 
+### Your Tailscale devices without a code
+
+A machine can let in your own Tailscale devices without a pairing code. Turn on
+**Trust my Tailscale devices** in **Settings → Sharing & access**, or run
+`t3 auth tailnet-trust on` on the machine. Then a device signed in to the same
+Tailscale account as that machine connects over the tailnet with no code: in
+Flock, enter the machine's name (add `:port` if it isn't on 3773), MagicDNS name,
+or Tailscale IP and leave the code empty. Machines that your connected
+environments see on the tailnet are listed under **On your tailnet**.
+
+- Anyone signed in to that Tailscale account, or able to run programs on one of
+  its devices, counts as you. Only connections over the tailnet qualify: LAN,
+  T3 Connect and internet connections still need a code, and so do tagged
+  devices and devices shared from another tailnet.
+- The machine must be reachable on its Tailscale address, such as the
+  [background service](./background-service.md#local-network-access) or
+  `t3 serve --host <tailscale-ip>`, or through Tailscale HTTPS set up by T3 Code.
+- A tagged machine has no Tailscale user of its own. Name the login to trust in
+  Settings or with `t3 auth tailnet-trust on --login you@github`.
+- Devices let in this way appear in the session list as
+  `Tailscale: <device> (<login>)` and can be revoked there. Turning the setting
+  off, in Settings or with `t3 auth tailnet-trust off`, signs them all out.
+
 ### Hosted web app
 
 [app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly

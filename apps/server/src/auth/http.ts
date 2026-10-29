@@ -9,6 +9,7 @@ import {
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
+  type EnvironmentOperationForbiddenReason,
   EnvironmentRequestInvalidError,
   type EnvironmentRequestInvalidReason,
   EnvironmentResourceNotFoundError,
@@ -32,6 +33,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -132,7 +134,7 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+function failEnvironmentOperationForbidden(reason: EnvironmentOperationForbiddenReason) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -263,6 +265,7 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const tailnetTrust = yield* TailnetTrust.TailnetTrust;
 
     return handlers
       .handle(
@@ -408,6 +411,28 @@ export const layer = HttpApiBuilder.group(
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("access_token_issuance_failed", error),
           ),
+        ),
+      )
+      .handle(
+        "tailnetSession",
+        Effect.fn("environment.auth.tailnetSession")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            yield* appendCredentialResponseHeaders;
+            return yield* tailnetTrust.issueSession(request, {
+              ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
+              ...(args.payload.client_device_type
+                ? { deviceType: args.payload.client_device_type }
+                : {}),
+              ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
+            });
+          },
+          Effect.catchTags({
+            TailnetTrustRefusedError: (error) => failEnvironmentOperationForbidden(error.reason),
+            ServerAuthAuthenticatedAccessTokenIssueError: (error) =>
+              failEnvironmentInternal("access_token_issuance_failed", error),
+          }),
         ),
       )
       .handle(
