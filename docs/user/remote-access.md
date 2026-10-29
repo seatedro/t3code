@@ -179,12 +179,17 @@ on **Trust my Tailscale devices** in **Settings → Sharing & access**, or run
 full access. Then a device signed in to the same Tailscale account as that
 machine connects with no code: in Flock, enter the machine's name (add `:port`
 if it isn't on 3773), MagicDNS name, or Tailscale IP and leave the code empty.
-Your machines that your connected environments see on the tailnet are listed
-under **On your tailnet**.
+The machines you connected this way list your other machines they see under
+**On your tailnet**.
 
 - Anyone signed in to that Tailscale account counts as you, and so does any
   device you joined with an untagged auth key of your own, such as a VM,
   container or CI runner, and anyone who can run programs on one of them.
+- A forwarder on one of those devices extends that trust to whoever can reach
+  it. T3 Code refuses requests from web proxies that say they forwarded them,
+  but a plain port forward, such as `ssh -L 0.0.0.0:…`, a published Docker port
+  or a TCP proxy, looks exactly like the device. Don't run one toward a machine
+  that trusts your devices unless you mean everyone it serves to count as you.
 - Only direct connections to the machine's Tailscale address qualify. Run it
   where that address answers, such as the
   [background service](./background-service.md#local-network-access) or
@@ -196,10 +201,16 @@ under **On your tailnet**.
   exit nodes still need a code.
 - A tagged machine has no Tailscale user of its own. Name the login to trust in
   Settings or with `t3 auth tailnet-trust on --login you@github`.
-- Each device gets one session, listed as `Tailscale: <device> (<login>)` and
-  revocable there. Connecting again replaces it, so a second app on the same
-  device signs the first one out. Turning the setting off, in Settings or with
-  `t3 auth tailnet-trust off`, signs them all out.
+- Each device gets one session, listed as `Tailscale: <device> (<login>)`.
+  Connecting again replaces it, so a second app on the same device signs the
+  first one out. Revoking it signs that device out, but while it stays on your
+  tailnet it can connect again without a code; to keep it out, remove it from
+  your tailnet or turn the setting off.
+- Turning the setting off, in Settings or with `t3 auth tailnet-trust off`,
+  revokes the sessions it gave out. Anything a trusted device created with
+  them, such as a pairing link or another device's session, stays until you
+  revoke it in the session list. Changing the trusted login, or this machine
+  signing in to Tailscale as someone else, revokes them as well.
 
 ### Hosted web app
 

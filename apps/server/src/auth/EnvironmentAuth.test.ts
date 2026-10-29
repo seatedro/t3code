@@ -12,6 +12,8 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 
@@ -22,7 +24,11 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
-import { TAILNET_DEVICE_SUBJECT_PREFIX, TailnetSessionGate } from "./TailnetSessionGate.ts";
+import {
+  TAILNET_DEVICE_SUBJECT_PREFIX,
+  TailnetSessionGate,
+  type TailnetSessionVerdict,
+} from "./TailnetSessionGate.ts";
 
 const TEST_SERVER_PORT = 13_773;
 
@@ -677,14 +683,37 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
   );
 
-  it.effect("refuses sessions tailnet trust admitted, over HTTP and sockets, while it is off", () =>
+  const withTailnetGate = <A, E>(
+    body: (control: {
+      readonly verdict: Ref.Ref<TailnetSessionVerdict>;
+      readonly refused: Deferred.Deferred<void>;
+    }) => Effect.Effect<A, E, EnvironmentAuth.EnvironmentAuth | SessionStore.SessionStore>,
+  ) =>
     Effect.gen(function* () {
-      const open = yield* Ref.make(true);
-      yield* Effect.gen(function* () {
+      const verdict = yield* Ref.make<TailnetSessionVerdict>("admitted");
+      const refused = yield* Deferred.make<void>();
+      return yield* body({ verdict, refused }).pipe(
+        Effect.provide(
+          layerEnvironmentAuth().pipe(
+            Layer.provide(
+              Layer.succeed(TailnetSessionGate, {
+                check: () => Ref.get(verdict),
+                whenRefused: () => Deferred.await(refused),
+              }),
+            ),
+          ),
+        ),
+      );
+    });
+
+  const TAILNET_SUBJECT = `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook:user%3A1%3Aowner%40github`;
+
+  it.effect("refuses sessions tailnet trust admitted, over HTTP and sockets, while it is off", () =>
+    withTailnetGate(({ verdict }) =>
+      Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        const tailnet = yield* serverAuth.issueSession({
-          subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
-        });
+        const sessions = yield* SessionStore.SessionStore;
+        const tailnet = yield* serverAuth.issueSession({ subject: TAILNET_SUBJECT });
         const paired = yield* serverAuth.issueSession();
         const ticket = yield* serverAuth.issueWebSocketTicket(tailnet, { use: "rpc" });
         const socket = { url: `/ws?wsTicket=${ticket.ticket}`, cookies: {}, headers: {} } as never;
@@ -692,38 +721,80 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         expect(
           (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token))).sessionId,
         ).toBe(tailnet.sessionId);
-        yield* Ref.set(open, false);
-        for (const refused of [
-          serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token)),
-          serverAuth.authenticateWebSocketUpgrade(socket, "rpc"),
-        ]) {
-          expect(yield* Effect.flip(refused)).toMatchObject({
-            _tag: "ServerAuthInvalidCredentialError",
-          });
+        for (const closed of ["off", "unknown"] as const) {
+          yield* Ref.set(verdict, closed);
+          for (const refused of [
+            serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token)),
+            serverAuth.authenticateWebSocketUpgrade(socket, "rpc"),
+          ]) {
+            expect(yield* Effect.flip(refused)).toMatchObject({
+              _tag: "ServerAuthInvalidCredentialError",
+            });
+          }
         }
+        // Refused, not revoked: turning trust back on lets the same device back in.
+        expect((yield* sessions.verify(tailnet.token)).sessionId).toBe(tailnet.sessionId);
         expect(
           (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(paired.token))).sessionId,
         ).toBe(paired.sessionId);
-      }).pipe(
-        Effect.provide(
-          layerEnvironmentAuth().pipe(
-            Layer.provide(Layer.succeed(TailnetSessionGate, { isOpen: Ref.get(open) })),
-          ),
-        ),
-      );
-    }),
+      }),
+    ),
+  );
+
+  it.effect("revokes a session admitted under an identity trust no longer covers", () =>
+    withTailnetGate(({ verdict }) =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        const tailnet = yield* serverAuth.issueSession({ subject: TAILNET_SUBJECT });
+        yield* Ref.set(verdict, "mismatch");
+        yield* Effect.flip(serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token)));
+        expect(yield* Effect.flip(sessions.verify(tailnet.token))).toMatchObject({
+          _tag: "SessionTokenRevokedError",
+        });
+      }),
+    ),
+  );
+
+  it.effect("ends a tailnet session's connection when trust refuses it, revoked or not", () =>
+    withTailnetGate(({ refused }) =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        const tailnet = yield* serverAuth.issueSession({ subject: TAILNET_SUBJECT });
+        const paired = yield* serverAuth.issueSession();
+        const tailnetSocket = yield* Effect.forkChild(serverAuth.awaitSessionEnd(tailnet));
+        const pairedSocket = yield* Effect.forkChild(serverAuth.awaitSessionEnd(paired));
+        // As when the revocation pass failed: nothing is revoked, the gate just closes.
+        yield* Deferred.succeed(refused, undefined);
+        yield* Fiber.join(tailnetSocket);
+        expect(pairedSocket.pollUnsafe()).toBeUndefined();
+        yield* sessions.revoke(paired.sessionId);
+        yield* Fiber.join(pairedSocket);
+      }),
+    ),
   );
 
   it.effect("refuses tailnet-admitted sessions when the server provides no gate", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-      const tailnet = yield* serverAuth.issueSession({
-        subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
-      });
+      const tailnet = yield* serverAuth.issueSession({ subject: TAILNET_SUBJECT });
       expect(
         yield* Effect.flip(serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token))),
       ).toMatchObject({ _tag: "ServerAuthInvalidCredentialError" });
     }).pipe(Effect.provide(layerEnvironmentAuth())),
+  );
+
+  it.effect.each(["Basic dXNlcjpwYXNz", "bearer lowercase-scheme", "Bearer ", "Bearer"])(
+    "treats Authorization %j as a bad credential, not a missing one",
+    (authorization) =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const request = { cookies: {}, headers: { authorization } } as never;
+        expect(yield* Effect.flip(serverAuth.authenticateHttpRequest(request))).toMatchObject({
+          _tag: "ServerAuthInvalidCredentialError",
+        });
+      }).pipe(Effect.provide(layerEnvironmentAuth())),
   );
 
   it.effect("binds a DPoP session's RPC socket ticket to its proof key", () =>

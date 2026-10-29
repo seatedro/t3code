@@ -92,7 +92,7 @@ const makeHarness = (
 
 const peers = Effect.flatMap(TailnetDiscovery.TailnetDiscovery, (discovery) => discovery.peers);
 
-it.effect("lists the owner's tailnet machines that answer as T3 servers", () => {
+it.effect("lists the owner's machines that answer as T3 servers, direct addresses first", () => {
   const { probed, layer } = makeHarness(
     {
       running: true,
@@ -147,7 +147,7 @@ it.effect("lists the owner's tailnet machines that answer as T3 servers", () => 
           online: true,
           environmentId: EnvironmentId.make("env-beta"),
           label: "Beta",
-          httpBaseUrl: "https://beta.tail.ts.net/",
+          httpBaseUrl: "http://100.64.0.4:3773/",
         },
       ],
     });

@@ -349,11 +349,6 @@ const EnvironmentTailnetSessionErrors = [
   EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentTailnetPeersErrors = [
-  EnvironmentAuthInvalidError,
-  EnvironmentScopeRequiredError,
-  EnvironmentInternalError,
-] as const;
 const EnvironmentScopedOperationErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -623,13 +618,12 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-/** Authenticates in its handler: a tailnet device the environment trusts may list without a session. */
 class EnvironmentTailnetHttpApi extends HttpApiGroup.make("tailnet").add(
   HttpApiEndpoint.get("peers", "/api/tailnet/peers", {
     headers: OptionalBearerHeaders,
     success: TailnetPeersResult,
-    error: EnvironmentTailnetPeersErrors,
-  }),
+    error: EnvironmentScopedOperationErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
 class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")

@@ -41,26 +41,36 @@ Windows.
 
 A web page on a trusted device must not borrow its identity, because the
 session is a shell. Requests with an `Origin`, or a `Sec-Fetch-Site` other than
-`none`, are refused, Host must be one of this node's names or addresses (which
-defeats DNS rebinding), and the two routes that admit by identity get no CORS.
-Native clients send none of these headers.
+`none`, are refused, and Host must be one of this node's names or addresses,
+which defeats DNS rebinding. The tailnet-session handler strips CORS from its
+own responses, so the decision follows the route that matched, whatever path
+spelling the router accepted. Native clients send none of these headers.
+Requests carrying proxy headers (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`,
+`Via`, Serve's) are refused too: a proxy on a trusted device would pass its own
+clients through as that device. A plain TCP forwarder adds nothing to detect.
 
 The owner is the machine's own user, matched by login and user id, since the
 same login in another tailnet is another user. A tagged machine trusts the
 configured `tailnetTrustLogin`. The machine itself never qualifies, since any
 local program can reach its own address, and neither do tagged, shared-in or
 sharee nodes, nor subnet routers and exit nodes, which speak for hosts behind
-them. Discovery lists only the owner's machines by the same rule.
+them. Discovery lists only the owner's machines by the same rule, and needs an
+ordinary session with `access:read`.
 
 Setting either key takes every standard scope
 ([requiredScopesForServerSettingsPatch](../../packages/contracts/src/settings.ts)),
-because it decides who gets them without a code. Later requests do not consult
-Tailscale, so learned routes keep working, but
+because it decides who gets them without a code. A session's subject is
+stamped with the node and the identity it was admitted under. Later requests do
+not consult Tailscale for the device, so learned routes keep working, but
 [TailnetSessionGate](../../apps/server/src/auth/TailnetSessionGate.ts) refuses
-`tailnet-device:` sessions whenever the setting is off, and fails closed where
-the server does not provide it. Turning it off also revokes them, startup does
-before serving, and an admission that raced a turn-off revokes its own session.
-Each device holds one session; asking again replaces it.
+those sessions while trust is off and revokes one whose stamp trust no longer
+covers, such as after a login change or this machine signing in to Tailscale as
+someone else. It fails closed where the server does not provide it, and open
+sockets close when it stops admitting their session even if revocation fails.
+Every observed off, and every change of trusted identity, revokes them; startup
+does so before commands are ready, and an admission that raced a turn-off
+revokes its own session. Each device holds one session, and asking again
+replaces it, so revoking a device that is still trusted only signs it out once.
 
 ### Guest links are not sessions
 

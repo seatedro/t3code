@@ -557,6 +557,10 @@ export class EnvironmentAuth extends Context.Service<
     readonly authenticateBrowserSession: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
+    /** Completes when a connected session stops being valid: revoked, or no longer admitted by tailnet trust. */
+    readonly awaitSessionEnd: (
+      session: Pick<AuthenticatedSession, "sessionId" | "subject">,
+    ) => Effect.Effect<void, ServerAuthInternalError>;
   }
 >()("t3/auth/EnvironmentAuth") {}
 
@@ -707,16 +711,29 @@ export const make = Effect.gen(function* () {
   const devAuth = resolveReusableDevAuth(config);
   const tailnetGate = yield* TailnetSessionGate;
 
-  const rejectWhileTailnetTrustOff = <S extends { readonly subject: string }>(session: S) =>
+  // A session trust admitted is good only while trust still covers the identity it was stamped
+  // with; one admitted under another login or Tailscale user is revoked on sight.
+  const rejectUnlessTailnetTrusted = <
+    S extends { readonly subject: string; readonly sessionId: AuthSessionId },
+  >(
+    session: S,
+  ) =>
     isTailnetDeviceSubject(session.subject)
-      ? tailnetGate.isOpen.pipe(
-          Effect.flatMap((open) =>
-            open
+      ? tailnetGate.check(session.subject).pipe(
+          Effect.flatMap((verdict) =>
+            verdict === "admitted"
               ? Effect.succeed(session)
-              : Effect.fail(
-                  new ServerAuthInvalidCredentialError({
-                    diagnostic: "Tailnet trust is off, so the sessions it admitted are refused.",
-                  }),
+              : (verdict === "mismatch"
+                  ? sessions.revoke(session.sessionId).pipe(Effect.ignore)
+                  : Effect.void
+                ).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ServerAuthInvalidCredentialError({
+                        diagnostic: `Tailnet trust does not admit this session (${verdict}).`,
+                      }),
+                    ),
+                  ),
                 ),
           ),
         )
@@ -740,7 +757,7 @@ export const make = Effect.gen(function* () {
       ),
       mapSessionVerificationErrors,
       Effect.flatMap(rejectMcpClientAudience),
-      Effect.flatMap(rejectWhileTailnetTrustOff),
+      Effect.flatMap(rejectUnlessTailnetTrusted),
       Effect.map((session) => ({
         sessionId: session.sessionId,
         subject: session.subject,
@@ -780,7 +797,14 @@ export const make = Effect.gen(function* () {
     const dpopToken = parseDpopToken(request);
     const credential = resolveRequestCredential(request);
     if (!credential?.token) {
-      return Effect.fail(new ServerAuthMissingCredentialError({}));
+      // An Authorization header this server cannot read is a bad credential, not none at all.
+      return Effect.fail(
+        request.headers.authorization === undefined
+          ? new ServerAuthMissingCredentialError({})
+          : new ServerAuthInvalidCredentialError({
+              diagnostic: "The Authorization header is not a Bearer or DPoP token.",
+            }),
+      );
     }
     if (
       isBrowserCookieCredential(credential.source) &&
@@ -1256,7 +1280,7 @@ export const make = Effect.gen(function* () {
             .pipe(
               mapSessionVerificationErrors,
               Effect.flatMap(rejectMcpClientAudience),
-              Effect.flatMap(rejectWhileTailnetTrustOff),
+              Effect.flatMap(rejectUnlessTailnetTrusted),
             );
           if (session.audience !== undefined && session.audience !== use) {
             return yield* new ServerAuthInvalidCredentialError({
@@ -1384,6 +1408,19 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
 
+  const awaitSessionEnd: EnvironmentAuth["Service"]["awaitSessionEnd"] = (session) =>
+    Effect.raceFirst(
+      sessions
+        .awaitInvalidation(session.sessionId)
+        .pipe(
+          Effect.mapError((cause) => new ServerAuthSessionCredentialValidationError({ cause })),
+        ),
+      // Closes the connection even when trust-off revocation has not happened or failed.
+      isTailnetDeviceSubject(session.subject)
+        ? tailnetGate.whenRefused(session.subject)
+        : Effect.never,
+    ).pipe(Effect.withSpan("EnvironmentAuth.awaitSessionEnd"));
+
   return EnvironmentAuth.of({
     getDescriptor: Effect.fn("EnvironmentAuth.getDescriptor")(function () {
       return Effect.succeed(descriptor);
@@ -1410,6 +1447,7 @@ export const make = Effect.gen(function* () {
     issueMcpClientSession,
     consumeMcpApprovalCode,
     authenticateBrowserSession,
+    awaitSessionEnd,
   });
 });
 

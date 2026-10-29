@@ -359,6 +359,19 @@ describe("tailscale", () => {
           },
           { ...macbook, routesOtherHosts: true },
         ],
+        // A reply that does not list routes cannot rule them out.
+        [
+          { ...macbookWhois, Node: { ...macbookWhois.Node, AllowedIPs: undefined } },
+          { ...macbook, routesOtherHosts: true },
+        ],
+        [
+          { ...macbookWhois, Node: { ...macbookWhois.Node, AllowedIPs: "0.0.0.0/0" } },
+          { ...macbook, routesOtherHosts: true },
+        ],
+        [
+          { ...macbookWhois, Node: { ...macbookWhois.Node, PrimaryRoutes: "10.0.0.0/8" } },
+          { ...macbook, routesOtherHosts: true },
+        ],
       ] as const) {
         assert.deepEqual(yield* parseTailscaleWhois(JSON.stringify(whoisJson)), expected);
       }

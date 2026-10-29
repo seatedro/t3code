@@ -15,9 +15,11 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
-import { TAILNET_DEVICE_SUBJECT_PREFIX } from "../auth/TailnetSessionGate.ts";
+import * as TailnetSessionGate from "../auth/TailnetSessionGate.ts";
+import { TAILNET_DEVICE_SUBJECT_PREFIX, tailnetDeviceSubject } from "../auth/TailnetSessionGate.ts";
 import * as TailnetTrust from "./TailnetTrust.ts";
 import * as TailscaleLocal from "./TailscaleLocal.ts";
 
@@ -68,6 +70,9 @@ const whoisOf = (overrides: Partial<TailscaleWhois>): TailscaleWhois => ({
   ...overrides,
 });
 
+const OWNER_IDENTITY = `user:${OWNER_ID}:${OWNER_LOGIN}`;
+const OWNER_SUBJECT = tailnetDeviceSubject("nMacbook", OWNER_IDENTITY);
+
 const ownerWhois: Readonly<Record<string, TailscaleWhois>> = {
   [MACBOOK_IP]: whoisOf({}),
   [MACBOOK_IPV6]: whoisOf({}),
@@ -79,6 +84,10 @@ interface Scenario {
   readonly login?: string;
   readonly tailnet?: TailscaleTailnet | null;
   readonly whois?: Readonly<Record<string, TailscaleWhois>>;
+  /** Both `tailscale` slots taken by other requests. */
+  readonly busy?: boolean;
+  /** Every revocation the trust service attempts fails. */
+  readonly failRevoke?: boolean;
   /** Holds every whois until released, to interleave a settings change. */
   readonly whoisGate?: {
     readonly asked: Deferred.Deferred<void>;
@@ -116,12 +125,19 @@ const layerSettings = (initial: Partial<ServerSettings>) =>
     }),
   ).pipe(Layer.provide(ServerSettingsService.layerTest(initial)));
 
-const fakeTailscale = (scenario: Scenario, whoisCalls: Ref.Ref<ReadonlyArray<string>>) =>
+interface Probes {
+  readonly whoisCalls: Ref.Ref<ReadonlyArray<string>>;
+  /** What `tailscale status` says now; tests change it to sign the server in as someone else. */
+  readonly tailnet: Ref.Ref<TailscaleTailnet | null>;
+}
+
+const fakeTailscale = (scenario: Scenario, probes: Probes) =>
   TailscaleLocal.TailscaleLocal.of({
-    tailnet: Effect.succeed(scenario.tailnet === undefined ? ownerTailnet : scenario.tailnet),
+    tailnet: Ref.get(probes.tailnet),
     whois: (address) =>
       Effect.gen(function* () {
-        yield* Ref.update(whoisCalls, (calls) => [...calls, address]);
+        yield* Ref.update(probes.whoisCalls, (calls) => [...calls, address]);
+        if (scenario.busy === true) return yield* new TailscaleLocal.TailscaleLocalBusyError({});
         if (scenario.whoisGate !== undefined) {
           yield* Deferred.succeed(scenario.whoisGate.asked, undefined);
           yield* Deferred.await(scenario.whoisGate.release);
@@ -130,17 +146,32 @@ const fakeTailscale = (scenario: Scenario, whoisCalls: Ref.Ref<ReadonlyArray<str
       }),
   });
 
-const layerSessions = SessionStore.layer.pipe(
+/** The real auth stack and gate, so admission and authentication see the same state. */
+const layerAuth = EnvironmentAuth.layer.pipe(
+  Layer.provide(TailnetSessionGate.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-tailnet-trust-" })),
 );
 
-const layerFor = (scenario: Scenario, whoisCalls: Ref.Ref<ReadonlyArray<string>>) =>
+const layerFailingRevoke = Layer.effect(
+  SessionStore.SessionStore,
+  Effect.map(SessionStore.SessionStore, (sessions) =>
+    SessionStore.SessionStore.of({
+      ...sessions,
+      revoke: (sessionId) =>
+        Effect.fail(new SessionStore.SessionRevocationError({ sessionId, cause: "disk full" })),
+    }),
+  ),
+);
+
+const layerFor = (scenario: Scenario, probes: Probes) =>
   TailnetTrust.layer.pipe(
+    Layer.provide(scenario.failRevoke === true ? layerFailingRevoke : Layer.empty),
+    Layer.provideMerge(layerAuth),
     Layer.provideMerge(
-      Layer.succeed(TailscaleLocal.TailscaleLocal, fakeTailscale(scenario, whoisCalls)),
+      Layer.succeed(TailscaleLocal.TailscaleLocal, fakeTailscale(scenario, probes)),
     ),
     Layer.provideMerge(
       layerSettings({
@@ -148,24 +179,30 @@ const layerFor = (scenario: Scenario, whoisCalls: Ref.Ref<ReadonlyArray<string>>
         tailnetTrustLogin: scenario.login ?? "",
       }),
     ),
-    Layer.provideMerge(layerSessions),
     Layer.provide(NodeServices.layer),
   );
 
 type TailnetDeps =
   | TailnetTrust.TailnetTrust
+  | EnvironmentAuth.EnvironmentAuth
   | SessionStore.SessionStore
   | ServerSettingsService
   | TailscaleLocal.TailscaleLocal;
 
 const runScenario = <A, E>(
   scenario: Scenario,
-  body: (whoisCalls: Ref.Ref<ReadonlyArray<string>>) => Effect.Effect<A, E, TailnetDeps>,
+  body: (probes: Probes) => Effect.Effect<A, E, TailnetDeps>,
 ) =>
   Effect.gen(function* () {
-    const whoisCalls = yield* Ref.make<ReadonlyArray<string>>([]);
-    return yield* body(whoisCalls).pipe(Effect.provide(layerFor(scenario, whoisCalls)));
+    const probes: Probes = {
+      whoisCalls: yield* Ref.make<ReadonlyArray<string>>([]),
+      tailnet: yield* Ref.make(scenario.tailnet === undefined ? ownerTailnet : scenario.tailnet),
+    };
+    return yield* body(probes).pipe(Effect.provide(layerFor(scenario, probes)));
   });
+
+const bearer = (token: string) =>
+  ({ cookies: {}, headers: { authorization: `Bearer ${token}` } }) as never;
 
 const identify = (incoming: HttpServerRequest.HttpServerRequest) =>
   TailnetTrust.TailnetTrust.pipe(Effect.flatMap((trust) => trust.identify(incoming)));
@@ -191,11 +228,12 @@ it.effect("admits another device of the owner over a direct tailnet connection",
         loginName: OWNER_LOGIN,
         os: "macOS",
         address: MACBOOK_IP,
+        trustedIdentity: OWNER_IDENTITY,
       });
       const issued = yield* trust.issueSession(direct(), { deviceType: "mobile" });
       expect(issued.token_type).toBe("Bearer");
       const session = yield* sessions.verify(issued.access_token);
-      expect(session.subject).toBe("tailnet-device:nMacbook");
+      expect(session.subject).toBe(OWNER_SUBJECT);
       expect(session.method).toBe("bearer-access-token");
       expect(session.scopes).toEqual(AuthStandardClientScopes);
       expect(session.client).toMatchObject({
@@ -209,7 +247,7 @@ it.effect("admits another device of the owner over a direct tailnet connection",
 );
 
 it.effect("accepts the names and addresses that reach this node, and IPv6 or mapped sockets", () =>
-  runScenario({}, (whoisCalls) =>
+  runScenario({}, ({ whoisCalls }) =>
     Effect.gen(function* () {
       for (const host of [
         "pulsar",
@@ -327,6 +365,28 @@ const refusals: ReadonlyArray<{
     detail: "foreign_host",
     asksTailscale: false,
   },
+  ...[
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "via",
+    "tailscale-user-login",
+    "tailscale-funnel-request",
+  ].map((header) => ({
+    name: `a request a proxy forwarded (${header})`,
+    scenario: {},
+    request: direct({ [header]: header === "via" ? "1.1 nginx" : MACBOOK_IP }),
+    detail: "forwarded_request",
+    asksTailscale: false,
+  })),
+  {
+    name: "a peer when every tailscale slot is taken",
+    scenario: { busy: true },
+    request: direct(),
+    detail: "tailscale_busy",
+  },
   {
     name: "a LAN client",
     scenario: {},
@@ -360,7 +420,7 @@ const refusals: ReadonlyArray<{
         "x-forwarded-for": MACBOOK_IP,
       },
     }),
-    detail: "not_over_tailnet",
+    detail: "forwarded_request",
     asksTailscale: false,
   },
   {
@@ -448,7 +508,7 @@ const refusals: ReadonlyArray<{
 ];
 
 it.effect.each(refusals)("refuses $name", (refusal) =>
-  runScenario(refusal.scenario, (whoisCalls) =>
+  runScenario(refusal.scenario, ({ whoisCalls }) =>
     Effect.gen(function* () {
       expect(yield* Effect.flip(identify(refusal.request))).toMatchObject({
         _tag: "TailnetTrustRefusedError",
@@ -527,7 +587,7 @@ it.effect("turning the setting off revokes only the sessions it admitted", () =>
 
       yield* settings.updateSettings({ tailnetTrustEnabled: true });
       const again = yield* sessions.verify((yield* trust.issueSession(direct(), {})).access_token);
-      expect(again.subject).toBe("tailnet-device:nMacbook");
+      expect(again.subject).toBe(OWNER_SUBJECT);
     }),
   ),
 );
@@ -537,10 +597,7 @@ it.effect("reconcile, which startup awaits, revokes sessions left from before tr
     Effect.gen(function* () {
       const trust = yield* TailnetTrust.TailnetTrust;
       const sessions = yield* SessionStore.SessionStore;
-      const left = yield* sessions.issue({
-        subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
-        method: "bearer-access-token",
-      });
+      const left = yield* sessions.issue({ subject: OWNER_SUBJECT, method: "bearer-access-token" });
       const paired = yield* sessions.issue({ subject: "one-time-token" });
       yield* trust.reconcile;
       expect((yield* sessions.listActive()).map((session) => session.sessionId)).toEqual([
@@ -549,6 +606,108 @@ it.effect("reconcile, which startup awaits, revokes sessions left from before tr
       expect(yield* Effect.flip(sessions.verify(left.token))).toMatchObject({
         _tag: "SessionTokenRevokedError",
       });
+    }),
+  ),
+);
+
+it.effect("reconcile revokes sessions admitted under an identity trust no longer covers", () =>
+  runScenario({}, () =>
+    Effect.gen(function* () {
+      const trust = yield* TailnetTrust.TailnetTrust;
+      const sessions = yield* SessionStore.SessionStore;
+      const current = yield* sessions.issue({ subject: OWNER_SUBJECT });
+      const otherLogin = yield* sessions.issue({
+        subject: tailnetDeviceSubject("nMacbook", "login:mallory@github"),
+      });
+      const unstamped = yield* sessions.issue({
+        subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
+      });
+      yield* trust.reconcile;
+      expect(yield* tailnetSessionIds).toEqual([current.sessionId]);
+      for (const gone of [otherLogin, unstamped]) {
+        expect(yield* Effect.flip(sessions.verify(gone.token))).toMatchObject({
+          _tag: "SessionTokenRevokedError",
+        });
+      }
+    }),
+  ),
+);
+
+it.effect("changing the trusted login signs out the devices let in under the old one", () =>
+  runScenario(
+    {
+      login: OWNER_LOGIN,
+      tailnet: { ...ownerTailnet, self: { ...self, tagged: true, loginName: null } },
+    },
+    () =>
+      Effect.gen(function* () {
+        const trust = yield* TailnetTrust.TailnetTrust;
+        const sessions = yield* SessionStore.SessionStore;
+        const settings = yield* ServerSettingsService;
+        const admitted = yield* sessions.verify(
+          (yield* trust.issueSession(direct(), {})).access_token,
+        );
+        yield* settings.updateSettings({ tailnetTrustLogin: "someone@github" });
+        yield* sessions.awaitInvalidation(admitted.sessionId);
+      }),
+  ),
+);
+
+it.effect("trust turned off and straight back on still signs devices out", () =>
+  runScenario({}, () =>
+    Effect.gen(function* () {
+      const trust = yield* TailnetTrust.TailnetTrust;
+      const sessions = yield* SessionStore.SessionStore;
+      const settings = yield* ServerSettingsService;
+      const admitted = yield* sessions.verify(
+        (yield* trust.issueSession(direct(), {})).access_token,
+      );
+      yield* settings.updateSettings({ tailnetTrustEnabled: false });
+      yield* settings.updateSettings({ tailnetTrustEnabled: true });
+      yield* sessions.awaitInvalidation(admitted.sessionId);
+    }),
+  ),
+);
+
+it.effect("this machine signing in to Tailscale as someone else refuses and revokes on sight", () =>
+  runScenario({}, ({ tailnet }) =>
+    Effect.gen(function* () {
+      const trust = yield* TailnetTrust.TailnetTrust;
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const { access_token } = yield* trust.issueSession(direct(), {});
+      expect((yield* auth.authenticateHttpRequest(bearer(access_token))).subject).toBe(
+        OWNER_SUBJECT,
+      );
+      yield* Ref.set(tailnet, {
+        ...ownerTailnet,
+        self: { ...self, userId: 42, loginName: "mallory@github" },
+      });
+      expect(yield* Effect.flip(auth.authenticateHttpRequest(bearer(access_token)))).toMatchObject({
+        _tag: "ServerAuthInvalidCredentialError",
+      });
+      expect(yield* Effect.flip(sessions.verify(access_token))).toMatchObject({
+        _tag: "SessionTokenRevokedError",
+      });
+    }),
+  ),
+);
+
+it.effect("an open connection ends on trust-off even when every revocation fails", () =>
+  runScenario({ failRevoke: true }, () =>
+    Effect.gen(function* () {
+      const trust = yield* TailnetTrust.TailnetTrust;
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const settings = yield* ServerSettingsService;
+      const { access_token } = yield* trust.issueSession(direct(), {});
+      const session = yield* auth.authenticateHttpRequest(bearer(access_token));
+      const socket = yield* Effect.forkChild(auth.awaitSessionEnd(session));
+      yield* settings.updateSettings({ tailnetTrustEnabled: false });
+      yield* Fiber.join(socket);
+      // Still unrevoked, so it was the gate that closed it; and it cannot sign in again.
+      expect((yield* sessions.verify(access_token)).sessionId).toBe(session.sessionId);
+      yield* Effect.flip(auth.authenticateHttpRequest(bearer(access_token)));
     }),
   ),
 );

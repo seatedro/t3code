@@ -488,8 +488,13 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
 const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
 const layerAuth = EnvironmentAuth.layer.pipe(
-  // The same settings layer the runtime uses, so the gate reads the live setting.
-  Layer.provide(TailnetSessionGate.layerFromSettings.pipe(Layer.provide(layerServerSettings))),
+  // The runtime's own settings and Tailscale layers, so the gate reads the live state.
+  Layer.provide(
+    TailnetSessionGate.layer.pipe(
+      Layer.provide(layerServerSettings),
+      Layer.provide(TailscaleLocal.layer),
+    ),
+  ),
   Layer.provideMerge(layerPersistence),
   Layer.provide(layerServerEnvironment),
   Layer.provide(ServerSecretStore.layer),

@@ -47,6 +47,25 @@ const appendCredentialResponseHeaders = HttpEffect.appendPreResponseHandler((_re
   Effect.succeed(HttpServerResponse.setHeaders(response, CREDENTIAL_RESPONSE_HEADERS)),
 );
 
+const CORS_RESPONSE_HEADERS = [
+  "access-control-allow-origin",
+  "access-control-allow-credentials",
+  "access-control-expose-headers",
+] as const;
+
+/**
+ * Decided by the route that matched, so no path spelling the router accepts (case, slashes)
+ * lets a web page read what tailnet trust hands out.
+ */
+const removeCorsHeaders = HttpEffect.appendPreResponseHandler((_request, response) =>
+  Effect.succeed(
+    CORS_RESPONSE_HEADERS.reduce(
+      (withoutCors, header) => HttpServerResponse.removeHeader(withoutCors, header),
+      response,
+    ),
+  ),
+);
+
 const appendDpopChallengeHeader = HttpEffect.appendPreResponseHandler((_request, response) =>
   Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", "DPoP")),
 );
@@ -417,6 +436,7 @@ export const layer = HttpApiBuilder.group(
         "tailnetSession",
         Effect.fn("environment.auth.tailnetSession")(
           function* (args) {
+            yield* removeCorsHeaders;
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
             yield* appendCredentialResponseHeaders;

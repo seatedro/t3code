@@ -471,7 +471,10 @@ export const parseTailscaleWhois = (
         tagged,
         // A zero or absent Sharer means the node is the tailnet's own.
         shared: node.Sharer !== undefined && node.Sharer !== null && node.Sharer !== 0,
+        // Without a route list tailscaled vouches for, the node may route for others.
         routesOtherHosts:
+          !Array.isArray(node.AllowedIPs) ||
+          (node.PrimaryRoutes !== undefined && !Array.isArray(node.PrimaryRoutes)) ||
           prefixesOf(node.PrimaryRoutes).length > 0 ||
           prefixesOf(node.AllowedIPs).some(
             (allowed) => !prefixesOf(node.Addresses).includes(allowed),

@@ -3386,12 +3386,11 @@ export const layer = Layer.unwrap(
           () =>
             Effect.raceFirst(
               rpcWebSocketHttpEffect,
-              sessions.awaitInvalidation(session.sessionId).pipe(
+              serverAuth.awaitSessionEnd(session).pipe(
                 Effect.as(HttpServerResponse.empty()),
-                Effect.catchTags({
-                  SessionCredentialVerificationError: (error) =>
-                    failEnvironmentInternal("internal_error", error),
-                }),
+                Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+                  failEnvironmentInternal("internal_error", error),
+                ),
               ),
             ),
           () => sessions.markDisconnected(session.sessionId),
