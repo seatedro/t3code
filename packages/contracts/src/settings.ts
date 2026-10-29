@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
+  AuthStandardClientScopes,
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import * as Effect from "effect/Effect";
@@ -1826,11 +1827,18 @@ export const ServerSettingsPatch = Schema.Struct({
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
+/** These decide who gets a full-scope session without a code, so only a full-scope client may set them. */
+const TAILNET_TRUST_SETTING_KEYS: ReadonlySet<string> = new Set([
+  "tailnetTrustEnabled",
+  "tailnetTrustLogin",
+]);
+
 export function requiredScopesForServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ReadonlyArray<AuthEnvironmentScope> {
   let changesProviders = false;
   let changesSettings = false;
+  let changesTailnetTrust = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     if (
@@ -1842,6 +1850,7 @@ export function requiredScopesForServerSettingsPatch(
       changesProviders = true;
     } else {
       changesSettings = true;
+      changesTailnetTrust ||= TAILNET_TRUST_SETTING_KEYS.has(key);
     }
   }
   // Removing a secret provider also clears the settings fields that read from it.
@@ -1849,8 +1858,11 @@ export function requiredScopesForServerSettingsPatch(
     changesSettings = true;
   }
   return [
-    ...(changesSettings || !changesProviders ? [AuthSettingsWriteScope] : []),
-    ...(changesProviders ? [AuthProvidersManageScope] : []),
+    ...new Set([
+      ...(changesSettings || !changesProviders ? [AuthSettingsWriteScope] : []),
+      ...(changesProviders ? [AuthProvidersManageScope] : []),
+      ...(changesTailnetTrust ? AuthStandardClientScopes : []),
+    ]),
   ];
 }
 

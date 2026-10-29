@@ -30,23 +30,37 @@ vocabulary gives these grants a familiar meaning.
 ### Tailnet devices skip pairing
 
 With `tailnetTrustEnabled`, [TailnetTrust](../../apps/server/src/tailnet/TailnetTrust.ts)
-issues a standard bearer session, without a code, to a device of the machine's own
-Tailscale user. Identity comes only from tailscaled's `whois`, never from the
-request. A direct connection qualifies only when both socket addresses are
-tailnet addresses. A Tailscale Serve request qualifies only when this server
-configured Serve, the socket is loopback, Host is the machine's MagicDNS name, and
-the whois of `X-Forwarded-For` agrees with Serve's login header. Relayed and
-DNS-rebound requests carry another Host, so they fail. Any program on a trusted
-device, or on this machine, can still pose as that device: the account is the
-boundary, as the setting says.
+issues a standard bearer session, without a code, to another device of the
+machine's own Tailscale user. Identity comes only from tailscaled's `whois` of
+the socket's remote address, never from the request, and only for a direct
+connection: the socket's local address must be one of this node's own Tailscale
+addresses, since other CGNAT overlays share the range. Tailscale Serve is not a
+way in. Its identity headers reach the server from loopback, where any local
+process or proxy could write them, and Serve can target a Unix socket only off
+Windows.
+
+A web page on a trusted device must not borrow its identity, because the
+session is a shell. Requests with an `Origin`, or a `Sec-Fetch-Site` other than
+`none`, are refused, Host must be one of this node's names or addresses (which
+defeats DNS rebinding), and the two routes that admit by identity get no CORS.
+Native clients send none of these headers.
 
 The owner is the machine's own user, matched by login and user id, since the
 same login in another tailnet is another user. A tagged machine trusts the
-configured `tailnetTrustLogin`. Tagged, shared-in and sharee nodes never
-qualify. Later requests do not consult Tailscale again, so learned routes keep
-working; the way out is revocation. Sessions are marked by the
-`tailnet-device:` subject, and whenever the setting is seen off, including at
-startup, they are revoked.
+configured `tailnetTrustLogin`. The machine itself never qualifies, since any
+local program can reach its own address, and neither do tagged, shared-in or
+sharee nodes, nor subnet routers and exit nodes, which speak for hosts behind
+them. Discovery lists only the owner's machines by the same rule.
+
+Setting either key takes every standard scope
+([requiredScopesForServerSettingsPatch](../../packages/contracts/src/settings.ts)),
+because it decides who gets them without a code. Later requests do not consult
+Tailscale, so learned routes keep working, but
+[TailnetSessionGate](../../apps/server/src/auth/TailnetSessionGate.ts) refuses
+`tailnet-device:` sessions whenever the setting is off, and fails closed where
+the server does not provide it. Turning it off also revokes them, startup does
+before serving, and an admission that raced a turn-off revokes its own session.
+Each device holds one session; asking again replaces it.
 
 ### Guest links are not sessions
 
