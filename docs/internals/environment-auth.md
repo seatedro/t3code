@@ -65,8 +65,12 @@ not consult Tailscale for the device, so learned routes keep working, but
 [TailnetSessionGate](../../apps/server/src/auth/TailnetSessionGate.ts) refuses
 those sessions while trust is off and revokes one whose stamp trust no longer
 covers, such as after a login change or this machine signing in to Tailscale as
-someone else. It fails closed where the server does not provide it, and open
-sockets close when it stops admitting their session even if revocation fails.
+someone else. It fails closed where the server does not provide it. Every
+socket, RPC and media alike, races `EnvironmentAuth.awaitSessionEnd`, so it
+closes when its session is revoked or the gate stops admitting it, even if
+revocation failed. While Tailscale cannot say who this machine is, the gate
+answers with a retryable error rather than a refusal, so clients wait instead
+of re-pairing.
 Every observed off, and every change of trusted identity, revokes them; startup
 does so before commands are ready, and an admission that raced a turn-off
 revokes its own session. Each device holds one session, and asking again

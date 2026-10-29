@@ -49,7 +49,12 @@ export interface TailnetDevice {
 export class TailnetTrustRefusedError extends Schema.TaggedError<TailnetTrustRefusedError>()(
   "TailnetTrustRefusedError",
   {
-    reason: Schema.Literals(["tailnet_trust_disabled", "tailnet_device_not_trusted"]),
+    reason: Schema.Literals([
+      "tailnet_trust_disabled",
+      "tailnet_device_not_trusted",
+      /** Tailscale could not answer now; worth retrying. */
+      "tailnet_trust_unavailable",
+    ]),
     /** Why, for the server log only; a client learns just the reason. */
     detail: Schema.String,
   },
@@ -57,7 +62,9 @@ export class TailnetTrustRefusedError extends Schema.TaggedError<TailnetTrustRef
   override get message(): string {
     return this.reason === "tailnet_trust_disabled"
       ? "This environment does not trust tailnet devices."
-      : "The connection does not come from a trusted tailnet device.";
+      : this.reason === "tailnet_trust_unavailable"
+        ? "Tailscale on this environment could not answer; try again."
+        : "The connection does not come from a trusted tailnet device.";
   }
 }
 
@@ -66,6 +73,9 @@ const notTrusted = (detail: string) =>
 
 const disabled = (detail: string) =>
   new TailnetTrustRefusedError({ reason: "tailnet_trust_disabled", detail });
+
+const unavailable = (detail: string) =>
+  new TailnetTrustRefusedError({ reason: "tailnet_trust_unavailable", detail });
 
 const unmapIpv4 = (address: string): string => {
   const lower = address.toLowerCase();
@@ -206,10 +216,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(() => notTrusted("settings_unreadable")),
       );
       if (!current.tailnetTrustEnabled) return yield* disabled("setting_off");
-      const browser = browserRequestDetail(request.headers);
-      if (browser !== null) return yield* notTrusted(browser);
-      if (isForwarded(request.headers)) return yield* notTrusted("forwarded_request");
-      // Checked before running tailscale, so other networks cannot make the server spawn it.
+      // Checked first and quietly, so other networks can neither spawn tailscale nor fill the log.
       const { remote, local } = socketOf(request);
       if (
         remote === undefined ||
@@ -219,8 +226,11 @@ export const make = Effect.gen(function* () {
       ) {
         return yield* notTrusted("not_over_tailnet");
       }
+      const browser = browserRequestDetail(request.headers);
+      if (browser !== null) return yield* notTrusted(browser);
+      if (isForwarded(request.headers)) return yield* notTrusted("forwarded_request");
       const tailnet = yield* tailscale.tailnet;
-      if (tailnet === null) return yield* notTrusted("tailscale_unavailable");
+      if (tailnet === null) return yield* unavailable("tailscale_unavailable");
       const self = tailnet.self;
       if (self === null) return yield* notTrusted("server_identity_unknown");
       // Another CGNAT or overlay interface (WARP, NetBird, a VPC) shares the address range.
@@ -231,7 +241,7 @@ export const make = Effect.gen(function* () {
       }
       const whois = yield* tailscale
         .whois(remote)
-        .pipe(Effect.mapError(() => notTrusted("tailscale_busy")));
+        .pipe(Effect.mapError(() => unavailable("tailscale_busy")));
       if (whois === null) return yield* notTrusted("unknown_peer");
       const verdict = evaluateTailnetDevice({
         tailnet,
