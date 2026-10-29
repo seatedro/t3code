@@ -721,15 +721,17 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         expect(
           (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token))).sessionId,
         ).toBe(tailnet.sessionId);
-        for (const closed of ["off", "unknown"] as const) {
+        // Off is a refusal; not knowing yet is retryable, so a client does not re-pair over it.
+        for (const [closed, tag] of [
+          ["off", "ServerAuthInvalidCredentialError"],
+          ["unknown", "ServerAuthTailnetIdentityUnavailableError"],
+        ] as const) {
           yield* Ref.set(verdict, closed);
           for (const refused of [
             serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token)),
             serverAuth.authenticateWebSocketUpgrade(socket, "rpc"),
           ]) {
-            expect(yield* Effect.flip(refused)).toMatchObject({
-              _tag: "ServerAuthInvalidCredentialError",
-            });
+            expect(yield* Effect.flip(refused)).toMatchObject({ _tag: tag });
           }
         }
         // Refused, not revoked: turning trust back on lets the same device back in.

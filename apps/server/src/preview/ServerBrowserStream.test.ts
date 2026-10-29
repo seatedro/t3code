@@ -12,6 +12,7 @@ import {
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -30,9 +31,11 @@ const platformLayer = NodeHttpPlatform.layer.pipe(Layer.provideMerge(NodeService
 const makeAuth = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   error?: EnvironmentAuth.ServerAuthCredentialError,
+  sessionEnd: Effect.Effect<void> = Effect.never,
 ) => {
   const requests: string[] = [];
   const layer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
+    awaitSessionEnd: () => sessionEnd,
     authenticateWebSocketUpgrade: (request) => {
       requests.push(request.originalUrl);
       return error
@@ -149,6 +152,50 @@ it.effect.each([
       },
     ]);
     expect(auth.requests).toEqual([resource]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("closes an open preview stream when its session ends", () =>
+  Effect.gen(function* () {
+    const ended = yield* Deferred.make<void>();
+    const auth = makeAuth([AuthOrchestrationReadScope], undefined, Deferred.await(ended));
+    const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+    yield* Queue.offer(output, { _tag: "viewport", width: 1280, height: 800 });
+    const browser = ServerBrowser.ServerBrowser.of({
+      clearProfile: () => Effect.void,
+      reportProfiles: () => Effect.void,
+      openDownload: () => Effect.succeedNone,
+      answerFileChooser: () => Effect.succeed(false),
+      attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
+    });
+    const services = yield* Layer.build(
+      HttpRouter.serve(
+        routeLayer.pipe(
+          Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
+          Layer.provide(platformLayer),
+        ),
+        { disableListenLog: true },
+      ).pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provide(auth.layer)),
+    );
+    const server = Context.get(services, HttpServer.HttpServer);
+    const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const socket = yield* Effect.acquireRelease(
+      Effect.sync(
+        () =>
+          new WebSocket(
+            `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&wsTicket=one-use-ticket`,
+          ),
+      ),
+      (socket) => Effect.sync(() => socket.close()),
+    );
+    socket.addEventListener("message", () => opened.resolve());
+    socket.addEventListener("close", () => closed.resolve());
+    yield* Effect.promise(() => opened.promise);
+    // Revoked, or tailnet trust turned off: the stream must not outlive the session.
+    yield* Deferred.succeed(ended, undefined);
+    yield* Effect.promise(() => closed.promise);
   }).pipe(Effect.scoped),
 );
 

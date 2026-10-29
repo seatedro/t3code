@@ -385,7 +385,19 @@ const refusals: ReadonlyArray<{
     name: "a peer when every tailscale slot is taken",
     scenario: { busy: true },
     request: direct(),
+    reason: "tailnet_trust_unavailable",
     detail: "tailscale_busy",
+  },
+  {
+    name: "a web page's request from the LAN, quietly, as off the tailnet",
+    scenario: {},
+    request: request({
+      remote: "192.168.1.40",
+      local: "192.168.1.20",
+      headers: { origin: "https://evil.example", "x-forwarded-for": "203.0.113.9" },
+    }),
+    detail: "not_over_tailnet",
+    asksTailscale: false,
   },
   {
     name: "a LAN client",
@@ -420,7 +432,7 @@ const refusals: ReadonlyArray<{
         "x-forwarded-for": MACBOOK_IP,
       },
     }),
-    detail: "forwarded_request",
+    detail: "not_over_tailnet",
     asksTailscale: false,
   },
   {
@@ -440,6 +452,7 @@ const refusals: ReadonlyArray<{
     name: "Tailscale is not running",
     scenario: { tailnet: null },
     request: direct(),
+    reason: "tailnet_trust_unavailable",
     detail: "tailscale_unavailable",
   },
   {

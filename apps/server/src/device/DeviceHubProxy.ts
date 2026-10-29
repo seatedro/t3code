@@ -14,7 +14,7 @@ import {
 import * as Socket from "effect/socket/Socket";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 
-import { authenticateMediaRequest } from "../auth/http.ts";
+import { authenticateMediaRequest, untilSessionEnds } from "../auth/http.ts";
 import * as DeviceService from "./DeviceService.ts";
 import { repeatStillFrame } from "./mjpegStillFrame.ts";
 
@@ -191,7 +191,7 @@ const handler = Effect.gen(function* () {
   const controlsDevice =
     (upgrade && hubPath !== "/api/devices/ws") ||
     (!readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath));
-  yield* authenticateMediaRequest(
+  const session = yield* authenticateMediaRequest(
     controlsDevice ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
   );
   const devices = yield* DeviceService.DeviceService;
@@ -216,7 +216,7 @@ const handler = Effect.gen(function* () {
       upstreamUrl.replace(/^http/, "ws"),
       routed?.protocols,
       routed?.headers,
-    );
+    ).pipe(untilSessionEnds(session));
   }
   return yield* proxyHttp(request, upstreamUrl, routed?.headers);
 });

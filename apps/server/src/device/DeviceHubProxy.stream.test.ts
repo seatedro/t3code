@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import * as NodeNet from "node:net";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -17,8 +18,9 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as DeviceService from "./DeviceService.ts";
 import * as DeviceHubProxy from "./DeviceHubProxy.ts";
 
-it.effect("preserves binary input and admission frames through the real socket proxy", () =>
+it.effect("preserves binary frames through the real socket proxy until the session ends", () =>
   Effect.gen(function* () {
+    const ended = yield* Deferred.make<void>();
     const hub = yield* Effect.acquireRelease(
       Effect.sync(() => new NodeWS.WebSocketServer({ port: 0 })),
       (server) =>
@@ -43,6 +45,7 @@ it.effect("preserves binary input and admission frames through the real socket p
         Layer.provideMerge(NodeHttpServer.layerTest),
         Layer.provide(
           Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
+            awaitSessionEnd: () => Deferred.await(ended),
             authenticateWebSocketUpgrade: () =>
               Effect.succeed({
                 sessionId: AuthSessionId.make("test"),
@@ -86,8 +89,13 @@ it.effect("preserves binary input and admission frames through the real socket p
         client.send(Uint8Array.of(0x03, 2));
       } else if (frames.length === 3) received.resolve();
     });
+    const closed = Promise.withResolvers<void>();
+    client.addEventListener("close", () => closed.resolve());
     yield* Effect.promise(() => received.promise);
     expect(frames).toEqual([[0x83], [0x03, 1], [0x03, 2]]);
+    // Revoked, or tailnet trust turned off: the proxied stream must not outlive the session.
+    yield* Deferred.succeed(ended, undefined);
+    yield* Effect.promise(() => closed.promise);
   }),
 );
 

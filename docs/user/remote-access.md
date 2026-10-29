@@ -203,11 +203,13 @@ The machines you connected this way list your other machines they see under
   Settings or with `t3 auth tailnet-trust on --login you@github`.
 - Each device gets one session, listed as `Tailscale: <device> (<login>)`.
   Connecting again replaces it, so a second app on the same device signs the
-  first one out. Revoking it signs that device out, but while it stays on your
-  tailnet it can connect again without a code; to keep it out, remove it from
-  your tailnet or turn the setting off.
+  first one out. Revoking it signs that device out and closes its open
+  connections, but while the device stays on your tailnet it can connect again
+  without a code. To keep it out, revoke its session and remove it from your
+  tailnet, or turn the setting off.
 - Turning the setting off, in Settings or with `t3 auth tailnet-trust off`,
-  revokes the sessions it gave out. Anything a trusted device created with
+  revokes the sessions it gave out and closes their open connections, including
+  live previews and device streams. Anything a trusted device created with
   them, such as a pairing link or another device's session, stays until you
   revoke it in the session list. Changing the trusted login, or this machine
   signing in to Tailscale as someone else, revokes them as well.

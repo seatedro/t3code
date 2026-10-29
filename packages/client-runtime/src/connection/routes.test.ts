@@ -195,6 +195,29 @@ describe("learned routes", () => {
     ).toBeNull();
   });
 
+  it("keeps how a route's credential was obtained when it marks the route Tailscale", () => {
+    const saved = direct("saved", "http://100.84.4.32:13862/");
+    const admitted: ConnectionRoute = {
+      target: saved.target,
+      profile: Option.some(
+        new BearerConnectionProfile({
+          ...(profileOf(saved) as BearerConnectionProfile),
+          admission: "tailnet-trust",
+        }),
+      ),
+    };
+    const routes = mergeLearnedRoutes({
+      entry: { target: admitted.target, profile: admitted.profile, enabled: true },
+      activeRoute: admitted,
+      reported: [{ kind: "tailnet", httpBaseUrl: "http://100.84.4.32:13862/" }],
+      allowInsecure: true,
+    })!;
+    expect(profileOf(routes[0]!)).toMatchObject({
+      network: "tailscale",
+      admission: "tailnet-trust",
+    });
+  });
+
   it("leaves user routes alone and does not learn an address already saved", () => {
     const entry: ConnectionCatalogEntry = {
       target: LAN.target,

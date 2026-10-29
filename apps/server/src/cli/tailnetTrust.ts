@@ -4,7 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Command, Flag } from "effect/cli";
 
+import { isTailnetDeviceSubject } from "../auth/TailnetSessionGate.ts";
 import { baseDirFlag } from "./config.ts";
+import { runWithEnvironmentAuth } from "./environmentAuth.ts";
 import { readSettingsObject, resolveCliServerPaths, updateSettingsFile } from "./settingsFile.ts";
 
 const tailnetTrustOnCommand = Command.make("on", {
@@ -42,7 +44,23 @@ const tailnetTrustOffCommand = Command.make("off", { baseDir: baseDirFlag }).pip
         ...settings,
         tailnetTrustEnabled: false,
       }));
-      yield* Console.log(`Tailnet trust is off in ${settingsPath}.\n`);
+      // Revoked here rather than left to a running server, which may be stopped or slow to notice.
+      const revoked = yield* runWithEnvironmentAuth(
+        flags,
+        (auth) =>
+          auth.listSessions().pipe(
+            Effect.flatMap((sessions) =>
+              Effect.forEach(
+                sessions.filter((session) => isTailnetDeviceSubject(session.subject)),
+                (session) => auth.revokeSession(session.sessionId),
+              ),
+            ),
+          ),
+        { quietLogs: true },
+      );
+      yield* Console.log(
+        `Tailnet trust is off in ${settingsPath}. Signed out ${revoked.length} device${revoked.length === 1 ? "" : "s"}.\n`,
+      );
     }),
   ),
 );

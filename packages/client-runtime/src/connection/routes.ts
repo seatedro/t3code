@@ -371,6 +371,7 @@ function withNetwork(route: ConnectionRoute, tailscale: boolean): ConnectionRout
         wsBaseUrl: profile.wsBaseUrl,
         ...(profile.learned === undefined ? {} : { learned: profile.learned }),
         ...(profile.authorization === undefined ? {} : { authorization: profile.authorization }),
+        ...(profile.admission === undefined ? {} : { admission: profile.admission }),
         ...(tailscale ? { network: "tailscale" as const } : {}),
       }),
     ),

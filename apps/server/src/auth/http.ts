@@ -204,6 +204,24 @@ export const authenticateMediaRequest =
     return session;
   });
 
+/**
+ * A media socket authenticates once at the upgrade; this ends it when that session stops being
+ * valid, as the RPC socket does, so a revoked or no longer trusted session loses its streams too.
+ */
+export const untilSessionEnds =
+  (session: Pick<EnvironmentAuth.AuthenticatedSession, "sessionId" | "subject">) =>
+  <A, E, R>(socket: Effect.Effect<A, E, R>) =>
+    EnvironmentAuth.EnvironmentAuth.pipe(
+      Effect.flatMap((serverAuth) =>
+        Effect.raceFirst(
+          socket,
+          serverAuth
+            .awaitSessionEnd(session)
+            .pipe(Effect.ignore, Effect.as(HttpServerResponse.empty())),
+        ),
+      ),
+    );
+
 export const failEnvironmentInternal =
   /* Request instrumentation already owns the span; keep this helper in that context. */
   Effect.fnUntraced(function* (reason: EnvironmentInternalErrorReason, error?: unknown) {
@@ -449,7 +467,10 @@ export const layer = HttpApiBuilder.group(
             });
           },
           Effect.catchTags({
-            TailnetTrustRefusedError: (error) => failEnvironmentOperationForbidden(error.reason),
+            TailnetTrustRefusedError: (error) =>
+              error.reason === "tailnet_trust_unavailable"
+                ? failEnvironmentInternal("tailnet_trust_unavailable")
+                : failEnvironmentOperationForbidden(error.reason),
             ServerAuthAuthenticatedAccessTokenIssueError: (error) =>
               failEnvironmentInternal("access_token_issuance_failed", error),
           }),

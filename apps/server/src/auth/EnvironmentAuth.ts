@@ -330,6 +330,15 @@ export class ServerAuthCloudMintJwtSigningError extends Schema.TaggedError<Serve
   }
 }
 
+export class ServerAuthTailnetIdentityUnavailableError extends Schema.TaggedError<ServerAuthTailnetIdentityUnavailableError>()(
+  "ServerAuthTailnetIdentityUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "Tailscale has not confirmed whose devices this machine trusts yet.";
+  }
+}
+
 export const ServerAuthInternalError = Schema.Union([
   ServerAuthBootstrapCredentialValidationError,
   ServerAuthSessionCredentialValidationError,
@@ -353,6 +362,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthCloudRelayIssuerMissingError,
   ServerAuthCloudHealthJwtSigningError,
   ServerAuthCloudMintJwtSigningError,
+  ServerAuthTailnetIdentityUnavailableError,
 ]);
 export type ServerAuthInternalError = typeof ServerAuthInternalError.Type;
 export const isServerAuthInternalError = Schema.is(ServerAuthInternalError);
@@ -712,32 +722,21 @@ export const make = Effect.gen(function* () {
   const tailnetGate = yield* TailnetSessionGate;
 
   // A session trust admitted is good only while trust still covers the identity it was stamped
-  // with; one admitted under another login or Tailscale user is revoked on sight.
-  const rejectUnlessTailnetTrusted = <
+  // with; one admitted under another login or Tailscale user is revoked on sight. Runs inside
+  // the request's span on every authentication, so it adds none of its own.
+  const rejectUnlessTailnetTrusted = Effect.fnUntraced(function* <
     S extends { readonly subject: string; readonly sessionId: AuthSessionId },
-  >(
-    session: S,
-  ) =>
-    isTailnetDeviceSubject(session.subject)
-      ? tailnetGate.check(session.subject).pipe(
-          Effect.flatMap((verdict) =>
-            verdict === "admitted"
-              ? Effect.succeed(session)
-              : (verdict === "mismatch"
-                  ? sessions.revoke(session.sessionId).pipe(Effect.ignore)
-                  : Effect.void
-                ).pipe(
-                  Effect.andThen(
-                    Effect.fail(
-                      new ServerAuthInvalidCredentialError({
-                        diagnostic: `Tailnet trust does not admit this session (${verdict}).`,
-                      }),
-                    ),
-                  ),
-                ),
-          ),
-        )
-      : Effect.succeed(session);
+  >(session: S) {
+    if (!isTailnetDeviceSubject(session.subject)) return session;
+    const verdict = yield* tailnetGate.check(session.subject);
+    if (verdict === "admitted") return session;
+    // Not the client's fault and not for long: retryable, not a bad credential.
+    if (verdict === "unknown") return yield* new ServerAuthTailnetIdentityUnavailableError({});
+    if (verdict === "mismatch") yield* sessions.revoke(session.sessionId).pipe(Effect.ignore);
+    return yield* new ServerAuthInvalidCredentialError({
+      diagnostic: `Tailnet trust does not admit this session (${verdict}).`,
+    });
+  });
 
   const authenticateToken = (
     token: string,

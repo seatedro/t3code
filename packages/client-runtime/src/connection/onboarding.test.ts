@@ -68,6 +68,7 @@ function layerPairingHttp(
       | "granted"
       | "tailnet_trust_disabled"
       | "tailnet_device_not_trusted"
+      | "tailnet_trust_unavailable"
       | 404;
   },
 ) {
@@ -84,6 +85,19 @@ function layerPairingHttp(
       const outcome = options?.tailnetSession ?? "granted";
       if (outcome === 404) {
         return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      if (outcome === "tailnet_trust_unavailable") {
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentInternalError",
+              code: "internal_error",
+              reason: outcome,
+              traceId: "trace-tailnet-test",
+            },
+            { status: 500 },
+          ),
+        );
       }
       if (outcome !== "granted") {
         return Promise.resolve(
@@ -687,27 +701,40 @@ describe("connection onboarding", () => {
       options: { tailnetSession: "tailnet_trust_disabled" },
       detail:
         'Turn on "Trust my Tailscale devices" on Paired environment, or enter a pairing code.',
+      tag: "ConnectionBlockedError",
     },
     {
       options: { tailnetSession: "tailnet_device_not_trusted" },
       detail:
         "Paired environment doesn't recognize this device as yours on Tailscale. Enter a pairing code.",
+      tag: "ConnectionBlockedError",
     },
     {
       options: { tailnetSession: 404 },
       detail: "Paired environment needs an update to connect without a code. Enter a pairing code.",
+      tag: "ConnectionBlockedError",
+    },
+    {
+      options: { tailnetSession: "tailnet_trust_unavailable" },
+      detail: "Tailscale on Paired environment couldn't answer just now. Try again in a moment.",
+      // A busy Tailscale is worth retrying, unlike a refusal.
+      tag: "ConnectionTransientError",
     },
     {
       options: { failDescriptor: true },
       detail: "Couldn't reach remote. Check that Tailscale is on and T3 Code is running there.",
+      tag: "ConnectionTransientError",
     },
-  ] as const)("explains a refused tailnet connection: $detail", ({ options, detail }) =>
+  ] as const)("explains a refused tailnet connection: $detail", (row) =>
     Effect.gen(function* () {
       const error = yield* prepareTailnetRegistration({ address: "remote" }).pipe(
-        Effect.provide(layerPairingOnboarding(options)),
+        Effect.provide(layerPairingOnboarding(row.options)),
         Effect.flip,
       );
-      expect(error.message).toBe(detail);
+      expect({ message: error.message, tag: error._tag }).toEqual({
+        message: row.detail,
+        tag: row.tag,
+      });
     }),
   );
 
@@ -733,6 +760,7 @@ describe("connection onboarding", () => {
               label: "Old label",
               httpBaseUrl: "http://old.example.test/",
               wsBaseUrl: "ws://old.example.test/",
+              admission: "tailnet-trust",
             }),
           ),
           enabled: true,
@@ -751,6 +779,7 @@ describe("connection onboarding", () => {
           label: "Renamed environment",
           httpBaseUrl: "http://100.65.180.100:3773/",
           wsBaseUrl: "ws://100.65.180.100:3773/",
+          admission: "tailnet-trust",
         },
         credential: { token: "bearer-token" },
       });
