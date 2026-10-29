@@ -13,6 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -21,6 +22,7 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { TAILNET_DEVICE_SUBJECT_PREFIX, TailnetSessionGate } from "./TailnetSessionGate.ts";
 
 const TEST_SERVER_PORT = 13_773;
 
@@ -673,6 +675,55 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       );
       expect(verified.sessionId).toBe(bearer.sessionId);
     }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+  );
+
+  it.effect("refuses sessions tailnet trust admitted, over HTTP and sockets, while it is off", () =>
+    Effect.gen(function* () {
+      const open = yield* Ref.make(true);
+      yield* Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const tailnet = yield* serverAuth.issueSession({
+          subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
+        });
+        const paired = yield* serverAuth.issueSession();
+        const ticket = yield* serverAuth.issueWebSocketTicket(tailnet, { use: "rpc" });
+        const socket = { url: `/ws?wsTicket=${ticket.ticket}`, cookies: {}, headers: {} } as never;
+
+        expect(
+          (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token))).sessionId,
+        ).toBe(tailnet.sessionId);
+        yield* Ref.set(open, false);
+        for (const refused of [
+          serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token)),
+          serverAuth.authenticateWebSocketUpgrade(socket, "rpc"),
+        ]) {
+          expect(yield* Effect.flip(refused)).toMatchObject({
+            _tag: "ServerAuthInvalidCredentialError",
+          });
+        }
+        expect(
+          (yield* serverAuth.authenticateHttpRequest(makeBearerRequest(paired.token))).sessionId,
+        ).toBe(paired.sessionId);
+      }).pipe(
+        Effect.provide(
+          layerEnvironmentAuth().pipe(
+            Layer.provide(Layer.succeed(TailnetSessionGate, { isOpen: Ref.get(open) })),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("refuses tailnet-admitted sessions when the server provides no gate", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const tailnet = yield* serverAuth.issueSession({
+        subject: `${TAILNET_DEVICE_SUBJECT_PREFIX}nMacbook`,
+      });
+      expect(
+        yield* Effect.flip(serverAuth.authenticateHttpRequest(makeBearerRequest(tailnet.token))),
+      ).toMatchObject({ _tag: "ServerAuthInvalidCredentialError" });
+    }).pipe(Effect.provide(layerEnvironmentAuth())),
   );
 
   it.effect("binds a DPoP session's RPC socket ticket to its proof key", () =>

@@ -13,6 +13,7 @@ import * as NetAddress from "effect/net/NetAddress";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import * as TailnetTrust from "./tailnet/TailnetTrust.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -157,6 +158,7 @@ it.effect("parks automatic pull until activation without delaying command readin
             Effect.as(undefined),
           ),
         }),
+        Layer.mock(TailnetTrust.TailnetTrust)({ reconcile: Effect.void }),
         Layer.mock(GitVcsDriver.GitVcsDriver)({
           statusDetails: (root) =>
             Deferred.succeed(statusCalled, root).pipe(

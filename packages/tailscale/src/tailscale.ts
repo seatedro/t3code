@@ -324,6 +324,8 @@ export interface TailscaleNode {
   readonly loginName: string | null;
   readonly tagged: boolean;
   readonly tailnetIpv4Addresses: readonly string[];
+  /** Every Tailscale address of the node, IPv4 and IPv6. */
+  readonly tailnetAddresses: readonly string[];
   readonly online: boolean;
   /** A device of someone this machine is shared with, not a member of its tailnet. */
   readonly sharee: boolean;
@@ -343,12 +345,29 @@ const normalizeDnsName = (value: unknown): string | null =>
 
 const hasTags = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
 
-const tailnetIpv4AddressesOf = (value: unknown): string[] =>
+const addressesOf = (value: unknown): string[] =>
   Array.isArray(value)
-    ? value
-        .map((address) => (typeof address === "string" ? (address.split("/")[0] ?? "") : ""))
-        .filter(isTailscaleIpv4Address)
+    ? value.flatMap((address) =>
+        typeof address === "string" && address.trim() !== ""
+          ? [(address.split("/")[0] ?? "").trim().toLowerCase()]
+          : [],
+      )
     : [];
+
+/** CIDR strings as tailscaled reports them, so a wider route never matches the node's own /32. */
+const prefixesOf = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.flatMap((prefix) =>
+        typeof prefix === "string" && prefix.trim() !== "" ? [prefix.trim().toLowerCase()] : [],
+      )
+    : [];
+
+const TAILSCALE_IPV6_PREFIX = "fd7a:115c:a1e0:";
+
+const tailnetAddressesOf = (value: unknown): string[] =>
+  addressesOf(value).filter(
+    (address) => isTailscaleIpv4Address(address) || address.startsWith(TAILSCALE_IPV6_PREFIX),
+  );
 
 function toTailscaleNode(
   node: typeof TailscaleNodeStatusJson.Type,
@@ -365,7 +384,8 @@ function toTailscaleNode(
     userId,
     loginName: tagged || userId === null ? null : nonEmptyString(users[String(userId)]?.LoginName),
     tagged,
-    tailnetIpv4Addresses: tailnetIpv4AddressesOf(node.TailscaleIPs),
+    tailnetIpv4Addresses: tailnetAddressesOf(node.TailscaleIPs).filter(isTailscaleIpv4Address),
+    tailnetAddresses: tailnetAddressesOf(node.TailscaleIPs),
     online: node.Online === true,
     sharee: node.ShareeNode === true,
   };
@@ -398,6 +418,9 @@ const TailscaleWhoisJson = Schema.Struct({
     User: Schema.optional(Schema.Unknown),
     Sharer: Schema.optional(Schema.Unknown),
     Tags: Schema.optional(Schema.Unknown),
+    Addresses: Schema.optional(Schema.Unknown),
+    AllowedIPs: Schema.optional(Schema.Unknown),
+    PrimaryRoutes: Schema.optional(Schema.Unknown),
     Hostinfo: Schema.optional(Schema.Struct({ OS: Schema.optional(Schema.Unknown) })),
   }),
   UserProfile: Schema.optional(
@@ -422,6 +445,8 @@ export interface TailscaleWhois {
   readonly tagged: boolean;
   /** Shared into this tailnet by someone, so it belongs to another tailnet. */
   readonly shared: boolean;
+  /** A subnet router or exit node, whose connections can come from hosts behind it. */
+  readonly routesOtherHosts: boolean;
 }
 
 export const parseTailscaleWhois = (
@@ -446,6 +471,11 @@ export const parseTailscaleWhois = (
         tagged,
         // A zero or absent Sharer means the node is the tailnet's own.
         shared: node.Sharer !== undefined && node.Sharer !== null && node.Sharer !== 0,
+        routesOtherHosts:
+          prefixesOf(node.PrimaryRoutes).length > 0 ||
+          prefixesOf(node.AllowedIPs).some(
+            (allowed) => !prefixesOf(node.Addresses).includes(allowed),
+          ),
       };
     }),
   );

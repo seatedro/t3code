@@ -14,6 +14,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { TailscaleLocal } from "./TailscaleLocal.ts";
 
 const DEFAULT_T3_PORT = 3773;
@@ -31,11 +32,24 @@ export class TailnetDiscovery extends Context.Service<
   }
 >()("t3/tailnet/TailnetDiscovery") {}
 
-const isCandidate = (node: TailscaleNode) =>
-  node.online &&
-  !node.sharee &&
-  !NON_HOST_OS.has(node.os?.toLowerCase() ?? "") &&
-  node.tailnetIpv4Addresses.length > 0;
+/**
+ * Only the owner's machines, by the same rule trust admits devices: this machine's user, or the
+ * configured login when this machine is tagged. Anyone else's T3 server picks its own label, and
+ * one tap would save it as if it were the owner's.
+ */
+const isOwnersCandidate = (self: TailscaleNode, configuredLogin: string) => {
+  const login = configuredLogin.trim().toLowerCase();
+  return (node: TailscaleNode) =>
+    node.online &&
+    !node.sharee &&
+    !node.tagged &&
+    node.loginName !== null &&
+    (self.tagged
+      ? login !== "" && node.loginName.toLowerCase() === login
+      : self.userId !== null && node.userId === self.userId && node.loginName === self.loginName) &&
+    !NON_HOST_OS.has(node.os?.toLowerCase() ?? "") &&
+    node.tailnetIpv4Addresses.length > 0;
+};
 
 /** Preferred first: Tailscale Serve's HTTPS name, then the direct ports. */
 const candidateBaseUrls = (node: TailscaleNode, ports: ReadonlySet<number>): string[] => {
@@ -51,6 +65,7 @@ const candidateBaseUrls = (node: TailscaleNode, ports: ReadonlySet<number>): str
 /** @public */
 export const make = Effect.gen(function* () {
   const tailscale = yield* TailscaleLocal;
+  const settings = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const config = yield* ServerConfig.ServerConfig;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -68,11 +83,15 @@ export const make = Effect.gen(function* () {
 
   const discover = Effect.gen(function* () {
     const tailnet = yield* tailscale.tailnet;
-    if (tailnet === null) return { available: false, peers: [] };
+    if (tailnet === null || tailnet.self === null) return { available: false, peers: [] };
     const ownEnvironmentId = yield* environment.getEnvironmentId;
+    const configuredLogin = yield* settings.getSettings.pipe(
+      Effect.map((current) => current.tailnetTrustLogin),
+      Effect.orElseSucceed(() => ""),
+    );
 
     const probes = tailnet.peers
-      .filter(isCandidate)
+      .filter(isOwnersCandidate(tailnet.self, configuredLogin))
       .flatMap((node) => candidateBaseUrls(node, ports).map((baseUrl) => ({ node, baseUrl })));
     const answers = yield* Effect.forEach(
       probes,

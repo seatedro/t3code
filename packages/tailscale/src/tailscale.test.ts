@@ -121,6 +121,7 @@ const pulsarNode = {
   loginName: "seatedro@github",
   tagged: false,
   tailnetIpv4Addresses: ["100.84.4.32"],
+  tailnetAddresses: ["100.84.4.32", "fd7a:115c:a1e0::5a29:421"],
   online: true,
   sharee: false,
 };
@@ -132,6 +133,8 @@ const macbookWhois = {
     ComputedName: "macbook",
     User: OWNER_ID,
     Tags: null,
+    Addresses: ["100.117.108.54/32", "fd7a:115c:a1e0::2533:6c36/128"],
+    AllowedIPs: ["100.117.108.54/32", "fd7a:115c:a1e0::2533:6c36/128"],
     Hostinfo: { OS: "macOS" },
   },
   UserProfile: { ID: OWNER_ID, LoginName: "seatedro@github", DisplayName: "rohit" },
@@ -228,6 +231,7 @@ describe("tailscale", () => {
             loginName: null,
             tagged: true,
             tailnetIpv4Addresses: ["100.70.0.2"],
+            tailnetAddresses: ["100.70.0.2", "fd7a:115c:a1e0::2"],
             online: false,
             sharee: false,
           },
@@ -240,6 +244,7 @@ describe("tailscale", () => {
             loginName: null,
             tagged: false,
             tailnetIpv4Addresses: [],
+            tailnetAddresses: ["fd7a:115c:a1e0::3"],
             online: true,
             sharee: true,
           },
@@ -269,6 +274,7 @@ describe("tailscale", () => {
               loginName: null,
               tagged: false,
               tailnetIpv4Addresses: [],
+              tailnetAddresses: [],
               online: false,
               sharee: false,
             },
@@ -299,6 +305,7 @@ describe("tailscale", () => {
         loginName: "seatedro@github",
         tagged: false,
         shared: false,
+        routesOtherHosts: false,
       };
       for (const [whoisJson, expected] of [
         [macbookWhois, macbook],
@@ -323,6 +330,35 @@ describe("tailscale", () => {
           { ...macbook, loginName: null },
         ],
         [{ Node: macbookWhois.Node }, { ...macbook, loginName: null }],
+        // An exit node or subnet router speaks for the hosts behind it.
+        [
+          {
+            ...macbookWhois,
+            Node: {
+              ...macbookWhois.Node,
+              AllowedIPs: [...macbookWhois.Node.AllowedIPs, "0.0.0.0/0", "::/0"],
+            },
+          },
+          { ...macbook, routesOtherHosts: true },
+        ],
+        [
+          {
+            ...macbookWhois,
+            Node: {
+              ...macbookWhois.Node,
+              AllowedIPs: [...macbookWhois.Node.AllowedIPs, "192.168.1.0/24"],
+              PrimaryRoutes: ["192.168.1.0/24"],
+            },
+          },
+          { ...macbook, routesOtherHosts: true },
+        ],
+        [
+          {
+            ...macbookWhois,
+            Node: { ...macbookWhois.Node, AllowedIPs: ["100.117.108.54/24"] },
+          },
+          { ...macbook, routesOtherHosts: true },
+        ],
       ] as const) {
         assert.deepEqual(yield* parseTailscaleWhois(JSON.stringify(whoisJson)), expected);
       }

@@ -253,12 +253,18 @@ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compres
   global: true,
 });
 
+/** These admit a caller by its tailnet identity, which a web page on that device must not borrow. */
+const CORS_EXCLUDED_PATHS: ReadonlySet<string> = new Set([
+  "/api/auth/tailnet-session",
+  "/api/tailnet/peers",
+]);
+
 export const layerBrowserApiCors = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
     // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    return HttpRouter.cors({
+    const cors = HttpMiddleware.cors({
       ...(devOrigin
         ? {
             allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
@@ -269,6 +275,15 @@ export const layerBrowserApiCors = Layer.unwrap(
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
+    return HttpRouter.middleware(
+      (httpEffect) => {
+        const withCors = cors(httpEffect);
+        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          CORS_EXCLUDED_PATHS.has(request.url.split("?")[0] ?? "") ? httpEffect : withCors,
+        );
+      },
+      { global: true },
+    );
   }),
 );
 
