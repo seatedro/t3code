@@ -420,6 +420,11 @@ export function createThreadEnvironmentAtoms<R, E>(
       snoozedUntil: null,
       snoozedAt: null,
     })),
+    // The server then drops the thread from the live shell; until it does, lists skip it.
+    archive: optimistic.wrap(commands.archive, (thread, _input, now) => ({
+      ...thread,
+      archivedAt: now,
+    })),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),
