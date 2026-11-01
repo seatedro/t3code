@@ -147,6 +147,10 @@ it("asks environments that omit older settled threads for their rows, with the c
   inputs.length = 0;
   registry.get(search.results(makeThreadSearchKey([envB], "needle")));
   expect(inputs).toEqual([[envB, { query: "needle" }]]);
+  // Archived threads are omitted everywhere, so every environment is asked for their rows.
+  inputs.length = 0;
+  registry.get(search.results(makeThreadSearchKey([envB], "ui", { includeArchived: true })));
+  expect(inputs).toEqual([[envB, { query: "ui", includeArchived: true, titlesOnly: true }]]);
 
   registry.dispose();
 });

@@ -3635,14 +3635,15 @@ export type OrchestrationV2GetWorktreeThreadIdsInput =
   typeof OrchestrationV2GetWorktreeThreadIdsInput.Type;
 
 /**
- * The client's thread search. With `olderSettledBefore`, the result also carries the rows of the
- * best matching threads settled before it, which shells that omit older settled threads leave out:
- * title, branch, pull request and project matches (in `projectIds` when given), then message hits.
- * Send the extra keys only to servers that advertise `shellOlderSettled`.
+ * The client's thread search, plus the rows of the best matches shells leave out (title, branch,
+ * pull request and project matches in `projectIds`, then message hits): threads settled before
+ * `olderSettledBefore`, and with `includeArchived` archived ones, whose messages it searches too.
+ * Send these keys only to servers that advertise `shellOlderSettled`; older ones ignore the last.
  */
 export const OrchestrationV2SearchThreadsInput = Schema.Struct({
   ...OrchestrationSearchThreadsInput.fields,
   olderSettledBefore: Schema.optionalKey(IsoDateTime),
+  includeArchived: Schema.optionalKey(Schema.Boolean),
   projectIds: Schema.optionalKey(Schema.Array(ProjectId)),
   /** The client's name for this environment, which its own ranking also matches. */
   environmentLabel: Schema.optionalKey(Schema.String),

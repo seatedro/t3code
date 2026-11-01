@@ -70,6 +70,7 @@ const SearchRequest = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
   /** Threads the caller already lists, left out before the hit limit. */
   excludedThreadIds: TokenList,
+  includeArchived: Schema.optionalKey(Schema.Boolean),
 });
 const SearchRow = Schema.Struct({
   messageRowid: Schema.Number,
@@ -160,7 +161,13 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
 // The scan folds ASCII case only, so accent variants and non-ASCII case variants may not match.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,
-  { match, substrings, projectId, excludedThreadIds }: typeof SearchRequest.Encoded,
+  {
+    match,
+    substrings,
+    projectId,
+    excludedThreadIds,
+    includeArchived,
+  }: typeof SearchRequest.Encoded,
 ) => sql`
     WITH eligible AS MATERIALIZED (
       SELECT threads.thread_id, threads.project_id
@@ -168,7 +175,7 @@ export const messageHitsQuery = (
       INNER JOIN projection_projects AS projects
         ON projects.project_id = threads.project_id
       WHERE threads.deleted_at IS NULL
-        AND threads.archived_at IS NULL
+        ${includeArchived === true ? sql`` : sql`AND threads.archived_at IS NULL`}
         AND projects.deleted_at IS NULL
         AND (${projectId} IS NULL OR threads.project_id = ${projectId})
         AND threads.thread_id NOT IN (SELECT value FROM json_each(${excludedThreadIds}))
@@ -249,7 +256,7 @@ export class ThreadSearch extends Context.Service<
   {
     /** Message text matches, for clients that rank their own thread list. */
     readonly search: (
-      input: OrchestrationSearchThreadsInput,
+      input: OrchestrationSearchThreadsInput & { readonly includeArchived?: boolean | undefined },
     ) => Effect.Effect<OrchestrationSearchThreadsResult, ThreadSearchError>;
     /**
      * Title, branch, pull request, and project matches ranked as the command
@@ -263,20 +270,43 @@ export class ThreadSearch extends Context.Service<
      * receive for a query: the best title, branch, pull request and project matches, ranked as
      * the palette ranks them, then the older ones among `messageThreadIds`, in their order.
      */
-    readonly searchOlderSettled: (input: {
-      readonly query: string;
-      readonly before: string;
-      readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
-      /** The caller's name for this environment, which its palette also matches. */
-      readonly environmentLabel?: string | undefined;
-      readonly messageThreadIds: ReadonlyArray<ThreadId>;
-    }) => Effect.Effect<ReadonlyArray<ThreadId>, ThreadSearchError>;
+    readonly searchOlderSettled: (
+      input: OmittedThreadSearchInput & { readonly before: string },
+    ) => Effect.Effect<ReadonlyArray<ThreadId>, ThreadSearchError>;
+    /** `searchOlderSettled` for archived threads, which every shell leaves out. */
+    readonly searchArchived: (
+      input: OmittedThreadSearchInput,
+    ) => Effect.Effect<ReadonlyArray<ThreadId>, ThreadSearchError>;
   }
 >()("t3/orchestration-v2/ThreadSearch") {}
 
+interface OmittedThreadSearchInput {
+  readonly query: string;
+  readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
+  /** The caller's name for this environment, which its palette also matches. */
+  readonly environmentLabel?: string | undefined;
+  readonly messageThreadIds: ReadonlyArray<ThreadId>;
+}
+
+// Which threads a shell left out: those settled before a cut, or the archived ones.
+const OmittedThreads = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("olderSettled"), before: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("archived") }),
+]);
+
+const omittedThreadsCondition = (
+  sql: SqlClient.SqlClient,
+  omitted: typeof OmittedThreads.Encoded,
+) =>
+  omitted.kind === "archived"
+    ? sql`json_extract(threads.payload_json, '$.archivedAt') IS NOT NULL`
+    : sql`json_extract(threads.payload_json, '$.archivedAt') IS NULL
+        AND json_extract(threads.payload_json, '$.settledOverride') = 'settled'
+        AND json_extract(threads.payload_json, '$.settledAt') < ${omitted.before}`;
+
 // Rows a client gets per search: enough for the shown results without sending every match.
-const OLDER_SETTLED_TITLE_ROWS = 15;
-const OLDER_SETTLED_MESSAGE_ROWS = 5;
+const OMITTED_TITLE_ROWS = 15;
+const OMITTED_MESSAGE_ROWS = 5;
 
 // Only the fields the palette scorer reads, so an interactive search does not decode payloads.
 const OlderSettledTitleRow = Schema.Struct({
@@ -335,13 +365,13 @@ export const make = Effect.gen(function* () {
     `,
   });
 
-  const olderSettledTitleCandidates = SqlSchema.findAll({
+  const omittedTitleCandidates = SqlSchema.findAll({
     Request: Schema.Struct({
-      before: Schema.String,
+      omitted: OmittedThreads,
       projectIds: Schema.NullOr(TokenList),
     }),
     Result: OlderSettledTitleRow,
-    execute: ({ before, projectIds }) => sql`
+    execute: ({ omitted, projectIds }) => sql`
       SELECT
         threads.thread_id AS id,
         json_extract(threads.payload_json, '$.title') AS title,
@@ -357,34 +387,30 @@ export const make = Effect.gen(function* () {
       INNER JOIN projection_projects AS projects
         ON projects.project_id = threads.project_id
       WHERE threads.deleted_at IS NULL
-        AND json_extract(threads.payload_json, '$.archivedAt') IS NULL
+        AND ${omittedThreadsCondition(sql, omitted)}
         AND projects.deleted_at IS NULL
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
-        AND json_extract(threads.payload_json, '$.settledOverride') = 'settled'
-        AND json_extract(threads.payload_json, '$.settledAt') < ${before}
         AND (${projectIds} IS NULL
           OR threads.project_id IN (SELECT value FROM json_each(${projectIds})))
     `,
   });
 
-  const olderSettledIds = SqlSchema.findAll({
+  const omittedIds = SqlSchema.findAll({
     Request: Schema.Struct({
-      before: Schema.String,
+      omitted: OmittedThreads,
       threadIds: TokenList,
       projectIds: Schema.NullOr(TokenList),
     }),
     Result: Schema.Struct({ id: ThreadId }),
-    execute: ({ before, threadIds, projectIds }) => sql`
+    execute: ({ omitted, threadIds, projectIds }) => sql`
       SELECT threads.thread_id AS id
       FROM orchestration_v2_projection_threads AS threads
       WHERE threads.thread_id IN (SELECT value FROM json_each(${threadIds}))
         AND threads.deleted_at IS NULL
-        AND json_extract(threads.payload_json, '$.archivedAt') IS NULL
+        AND ${omittedThreadsCondition(sql, omitted)}
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
-        AND json_extract(threads.payload_json, '$.settledOverride') = 'settled'
-        AND json_extract(threads.payload_json, '$.settledAt') < ${before}
         AND (${projectIds} IS NULL
           OR threads.project_id IN (SELECT value FROM json_each(${projectIds})))
     `,
@@ -411,6 +437,7 @@ export const make = Effect.gen(function* () {
       readonly excludedThreadIds?: ReadonlySet<ThreadId>;
       /** Off for an agent's search, which has no use for the user's picks. */
       readonly picks?: boolean;
+      readonly includeArchived?: boolean | undefined;
     },
   ) {
     // One message per thread: the best word match, then what the user wrote,
@@ -442,6 +469,7 @@ export const make = Effect.gen(function* () {
               ...messageSearch,
               projectId: input.projectId,
               excludedThreadIds: [...(input.excludedThreadIds ?? [])],
+              ...(input.includeArchived === true ? { includeArchived: true } : {}),
             });
       }),
     );
@@ -570,13 +598,15 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const searchOlderSettled: ThreadSearch["Service"]["searchOlderSettled"] = Effect.fn(
-    "ThreadSearch.searchOlderSettled",
-  )(function* ({ query, before, projectIds, environmentLabel, messageThreadIds }) {
+  // Traced as searchOlderSettled or searchArchived.
+  const searchOmitted = Effect.fnUntraced(function* (
+    { query, projectIds, environmentLabel, messageThreadIds }: OmittedThreadSearchInput,
+    omitted: typeof OmittedThreads.Type,
+  ) {
     const normalizedQuery = foldSearchQuery(query);
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const candidates = yield* read(
-      olderSettledTitleCandidates({ before, projectIds: projectIds ?? null }),
+      omittedTitleCandidates({ omitted, projectIds: projectIds ?? null }),
     );
     const subjectOf = (row: typeof OlderSettledTitleRow.Type): ThreadSearchSubject => ({
       id: row.id,
@@ -597,17 +627,17 @@ export const make = Effect.gen(function* () {
     const titleIds = rankSearchItems(candidates, (row, options) =>
       scoreThreadSearch(normalizedQuery, subjectOf(row), now, { ...options, picks: true }),
     )
-      .slice(0, OLDER_SETTLED_TITLE_ROWS)
+      .slice(0, OMITTED_TITLE_ROWS)
       .map(({ item }) => item.id);
     const shown = new Set(titleIds);
     const messageCandidates = [...new Set(messageThreadIds)].filter((id) => !shown.has(id));
-    const older =
+    const listed =
       messageCandidates.length === 0
         ? new Set<ThreadId>()
         : new Set(
             (yield* read(
-              olderSettledIds({
-                before,
+              omittedIds({
+                omitted,
                 threadIds: messageCandidates,
                 projectIds: projectIds ?? null,
               }),
@@ -615,53 +645,91 @@ export const make = Effect.gen(function* () {
           );
     return [
       ...titleIds,
-      ...messageCandidates.filter((id) => older.has(id)).slice(0, OLDER_SETTLED_MESSAGE_ROWS),
+      ...messageCandidates.filter((id) => listed.has(id)).slice(0, OMITTED_MESSAGE_ROWS),
     ];
   });
 
-  return ThreadSearch.of({ search, searchThreads, searchOlderSettled });
+  const searchOlderSettled: ThreadSearch["Service"]["searchOlderSettled"] = Effect.fn(
+    "ThreadSearch.searchOlderSettled",
+  )(function* ({ before, ...input }) {
+    return yield* searchOmitted(input, { kind: "olderSettled", before });
+  });
+
+  const searchArchived: ThreadSearch["Service"]["searchArchived"] = Effect.fn(
+    "ThreadSearch.searchArchived",
+  )(function* (input) {
+    return yield* searchOmitted(input, { kind: "archived" });
+  });
+
+  return ThreadSearch.of({ search, searchThreads, searchOlderSettled, searchArchived });
 });
 
 export const layer = Layer.effect(ThreadSearch, make);
 
 /**
- * The client search: message hits, and with `olderSettledBefore`, the rows of the best older
- * settled matches, which shells that omit them do not hold.
+ * The client search: message hits, and the rows of the best matches its shell leaves out: older
+ * settled threads with `olderSettledBefore`, archived threads with `includeArchived`.
  */
-export const searchThreadsWithOlderSettledRows = Effect.fn(
+export const searchThreadsWithOmittedRows = Effect.fn(
   "ThreadSearch.searchThreadsWithOlderSettledRows",
-)(function* <E1, E2, E3, E4, E5>(input: {
+)(function* <E1, E2, E3, E4, E5, E6>(input: {
   readonly request: OrchestrationV2SearchThreadsInput;
   readonly search: (
-    input: OrchestrationSearchThreadsInput,
+    input: Parameters<ThreadSearch["Service"]["search"]>[0],
   ) => Effect.Effect<OrchestrationSearchThreadsResult, E1>;
   readonly searchOlderSettled: (
     input: Parameters<ThreadSearch["Service"]["searchOlderSettled"]>[0],
   ) => Effect.Effect<ReadonlyArray<ThreadId>, E2>;
+  readonly searchArchived: (
+    input: Parameters<ThreadSearch["Service"]["searchArchived"]>[0],
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, E6>;
   readonly sql: SqlClient.SqlClient;
+  /** Reads active and archived rows alike. */
   readonly readThreads: (
     threadIds: ReadonlyArray<ThreadId>,
   ) => Effect.Effect<Effect.Effect<OrchestrationV2ThreadShellSnapshot, E4>, E3>;
   readonly latestSequence: Effect.Effect<number, E5>;
 }) {
-  const { olderSettledBefore, projectIds, environmentLabel, titlesOnly, ...request } =
-    input.request;
+  const {
+    olderSettledBefore,
+    includeArchived,
+    projectIds,
+    environmentLabel,
+    titlesOnly,
+    ...request
+  } = input.request;
+  const archived = includeArchived === true;
   const messages: OrchestrationV2SearchThreadsResult =
-    titlesOnly === true ? { matches: [] } : yield* input.search(request);
-  if (olderSettledBefore === undefined) return messages;
+    titlesOnly === true
+      ? { matches: [] }
+      : yield* input.search(archived ? { ...request, includeArchived } : request);
+  if (olderSettledBefore === undefined && !archived) return messages;
   // Ranked before the rows' transaction, so scoring never holds the shared reader.
-  const threadIds = yield* input.searchOlderSettled({
+  const omitted = {
     query: request.query,
-    before: olderSettledBefore,
     projectIds,
     environmentLabel,
     messageThreadIds: messages.matches.map((match) => match.threadId),
-  });
-  const older = yield* loadOlderSettledThreadsPage({
+  };
+  const threadIds = [
+    ...(olderSettledBefore === undefined
+      ? []
+      : yield* input.searchOlderSettled({ ...omitted, before: olderSettledBefore })),
+    ...(archived ? yield* input.searchArchived(omitted) : []),
+  ];
+  const rows = yield* loadOlderSettledThreadsPage({
     sql: input.sql,
     listThreads: Effect.succeed({ threadIds, counts: [] }),
-    readThreads: input.readThreads,
+    readThreads: (threadIds) =>
+      input.readThreads(threadIds).pipe(
+        Effect.map(
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            threads: [...snapshot.threads, ...snapshot.archivedThreads],
+          })),
+        ),
+      ),
     latestSequence: input.latestSequence,
   });
-  return { ...messages, snapshotSequence: older.snapshotSequence, threads: older.threads };
+  return { ...messages, snapshotSequence: rows.snapshotSequence, threads: rows.threads };
 });
