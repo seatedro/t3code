@@ -511,17 +511,21 @@ function poolKey(driver: ServerProvider["driver"], window: ServerProviderUsageWi
   return driver === "codex" ? window.kind : `${window.kind}:${window.id}`;
 }
 
+/** A spent weekly window also blocks the account's session window until the week resets. */
+export function spentWeeklyWindow(
+  account: Pick<LimitAccount, "driver" | "limits">,
+): ServerProviderUsageWindow | undefined {
+  return account.limits.windows.find(
+    (window) =>
+      window.usedPercent >= 100 &&
+      (account.driver === "claudeAgent"
+        ? window.id === "seven_day"
+        : account.driver === "codex" && window.kind === "weekly"),
+  );
+}
+
 function poolMember(account: LimitAccount, reported: ServerProviderUsageWindow, now: number) {
-  const spentWeekly =
-    reported.kind === "session"
-      ? account.limits.windows.find(
-          (window) =>
-            window.usedPercent >= 100 &&
-            (account.driver === "claudeAgent"
-              ? window.id === "seven_day"
-              : account.driver === "codex" && window.kind === "weekly"),
-        )
-      : undefined;
+  const spentWeekly = reported.kind === "session" ? spentWeeklyWindow(account) : undefined;
   if (!spentWeekly) return { account, window: reported, refillPercent: reported.usedPercent };
 
   const weeklyReset = resetMillis(spentWeekly);
