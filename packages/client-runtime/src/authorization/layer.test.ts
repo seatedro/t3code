@@ -1,6 +1,7 @@
 import {
   AuthStandardClientScopes,
   EnvironmentId,
+  ExecutionEnvironmentDescriptor,
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@t3tools/contracts";
 import { type RelayEnvironmentConnectResponse } from "@t3tools/contracts/relay";
@@ -12,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ManagedRelay from "../relay/managedRelay.ts";
@@ -43,6 +45,7 @@ const DESCRIPTOR = {
     repositoryIdentity: true,
   },
 };
+const decodeDescriptor = Schema.decodeUnknownEffect(ExecutionEnvironmentDescriptor);
 const BOOTSTRAP: RelayEnvironmentConnectResponse = {
   environmentId: ENVIRONMENT_ID,
   endpoint: ENDPOINT,
@@ -240,6 +243,7 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
 const prepareDirectBearer = Effect.fn("TestRemoteAuthorization.prepareDirectBearer")(function* (
   harness: Effect.Success<ReturnType<typeof makeHarness>>,
   times: number,
+  checkedDescriptor?: ExecutionEnvironmentDescriptor,
 ) {
   const target = new BearerConnectionTarget({
     environmentId: ENVIRONMENT_ID,
@@ -287,7 +291,7 @@ const prepareDirectBearer = Effect.fn("TestRemoteAuthorization.prepareDirectBear
   );
   const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
   return yield* Effect.forEach(Array.from({ length: times }), () =>
-    resolver.prepare(entry).pipe(Effect.result),
+    resolver.prepare(entry, checkedDescriptor).pipe(Effect.result),
   );
 });
 
@@ -312,6 +316,34 @@ describe("RemoteEnvironmentAuthorization", () => {
       });
       expect(harness.fetch.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
         "/.well-known/t3/environment",
+        "/api/auth/websocket-ticket/rpc",
+      ]);
+    }),
+  );
+
+  it.effect("prepares a route its check already answered with only a ticket request", () =>
+    Effect.gen(function* () {
+      const checked = yield* decodeDescriptor({
+        ...DESCRIPTOR,
+        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+      });
+      const harness = yield* makeHarness({ responses: [websocketTicket("checked-ticket")] });
+
+      const [prepared] = yield* prepareDirectBearer(harness, 1, checked);
+      const [elsewhere] = yield* prepareDirectBearer(harness, 1, {
+        ...checked,
+        environmentId: EnvironmentId.make("another-environment"),
+      });
+
+      expect(prepared).toMatchObject({
+        _tag: "Success",
+        success: { socketUrl: expect.stringContaining("wsTicket=checked-ticket") },
+      });
+      expect(elsewhere).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConnectionBlockedError", reason: "configuration" },
+      });
+      expect(harness.fetch.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
         "/api/auth/websocket-ticket/rpc",
       ]);
     }),

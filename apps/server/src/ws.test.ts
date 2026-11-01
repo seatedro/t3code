@@ -1009,7 +1009,7 @@ it.effect.each([
     ),
 );
 
-it.effect("on-demand clients get provider config without workspace snapshots", () =>
+it.effect("on-demand clients get provider config without what they never read", () =>
   Effect.gen(function* () {
     const instanceId = ProviderInstanceId.make("claudeAgent");
     const snapshotFor = (cwd: string, checkedAt: string) => ({
@@ -1120,12 +1120,18 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       _tag: "Request",
       id: configRequest,
       tag: WS_METHODS.subscribeServerConfig,
-      payload: { workspaceSnapshotsOnDemand: true },
+      payload: {
+        workspaceSnapshotsOnDemand: true,
+        withoutKeybindings: true,
+        withoutProviderCommands: true,
+      },
       headers: Headers.empty,
     });
     const snapshot = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
     if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
     assert.isUndefined(snapshot.config.providers[0]?.workspaceSnapshots);
+    assert.deepEqual(snapshot.config.providers[0]?.slashCommands, []);
+    assert.deepEqual(snapshot.config.keybindings, []);
     yield* server.write(0, { _tag: "Ack", requestId: configRequest });
 
     // A rescan that only touches a snapshot sends nothing; the next real change does.
@@ -1141,6 +1147,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     if (update.type !== "providerStatuses") return yield* Effect.die("Expected provider update");
     assert.equal(update.payload.providers[0]?.status, "warning");
     assert.isUndefined(update.payload.providers[0]?.workspaceSnapshots);
+    assert.deepEqual(update.payload.providers[0]?.slashCommands, []);
 
     yield* server.write(0, {
       _tag: "Request",
