@@ -117,17 +117,24 @@ describe("mergeUsage", () => {
     const shared = { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" };
     const merged = mergeUsage(
       [
-        environment("env-a", summary([bucket()], [shared])),
+        environment(
+          "env-a",
+          summary([bucket(), bucket({ day: "2026-08-08" as UsageDay })], [shared]),
+        ),
         environment("env-b", summary([bucket()], [shared])),
       ],
       USAGE_CONTRACT_VERSION,
     );
 
-    expect(merged.costUsd).toBe(10);
-    expect(merged.records).toBe(5);
+    expect(merged.costUsd).toBe(20);
+    expect(merged.records).toBe(10);
     expect(merged.sessions).toBe(1);
     expect(merged.duplicateSources).toHaveLength(1);
     expect(merged.contributingEnvironments).toEqual(["env-a"]);
+    expect([...merged.models[0]!.byPeriod]).toEqual([
+      ["2026-08-07", { costUsd: 10, totalTokens: 1160 }],
+      ["2026-08-08", { costUsd: 10, totalTokens: 1160 }],
+    ]);
   });
 
   it("drops only the duplicated provider, keeping the environment's other one", () => {
@@ -523,10 +530,39 @@ describe("mergeUsage", () => {
       unsplit: 5,
     });
     expect(merged.speedCost).toEqual({ standard: 9, fast: 6, ultrafast: 0, premium: 3 });
+    expect(
+      merged.providers.map(({ provider, speedPremiumUsd }) => [provider, speedPremiumUsd]),
+    ).toEqual([
+      ["claude", 3],
+      ["codex", 0],
+    ]);
     expect(merged.models.map(({ model, unpricedTokens }) => [model, unpricedTokens])).toEqual([
       ["claude-fable-5", 0],
       ["unknown-model", 1160],
       ["partly-reported", 928],
+    ]);
+  });
+
+  it("keys a model's periods by hour in an hourly window", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ hourStart: "2026-08-07T13:00:00.000Z" }),
+              bucket({ hourStart: "2026-08-07T14:00:00.000Z", costUsd: 4 }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect([...merged.models[0]!.byPeriod.keys()]).toEqual([
+      "2026-08-07T13:00:00.000Z",
+      "2026-08-07T14:00:00.000Z",
     ]);
   });
 
