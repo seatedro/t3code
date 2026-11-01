@@ -1118,7 +1118,7 @@ it.effect.each([
     ),
 );
 
-it.effect("on-demand clients get provider config without workspace snapshots", () =>
+it.effect("on-demand clients get provider config without what they never read", () =>
   Effect.gen(function* () {
     const instanceId = ProviderInstanceId.make("claudeAgent");
     const snapshotFor = (cwd: string, checkedAt: string) => ({
@@ -1251,7 +1251,11 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       _tag: "Request",
       id: configRequest,
       tag: WS_METHODS.subscribeServerConfig,
-      payload: { workspaceSnapshotsOnDemand: true, providerCatalogsOnDemand: true },
+      payload: {
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        withoutKeybindings: true,
+      },
       headers: Headers.empty,
     });
     const snapshot = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
@@ -1262,6 +1266,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     assert.deepEqual(snapshot.config.providers[0]?.skills, [
       { name: "machine-skill", path: "/skills/machine-skill", enabled: true },
     ]);
+    assert.deepEqual(snapshot.config.keybindings, []);
     yield* server.write(0, { _tag: "Ack", requestId: configRequest });
 
     // A rescan that only touches a snapshot sends nothing; the next real change does.
@@ -1298,6 +1303,18 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     if (replaced.type !== "providerStatuses") return yield* Effect.die("Expected provider update");
     assert.deepEqual(replaced.payload.providers[0]?.slashCommands, provider.slashCommands);
     assert.deepEqual(replaced.payload.providers[0]?.skills, provider.skills);
+    // A client without a command menu gets providers without commands or skills.
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("config-without-commands"),
+      tag: WS_METHODS.subscribeServerConfig,
+      payload: { workspaceSnapshotsOnDemand: true, withoutProviderCommands: true },
+      headers: Headers.empty,
+    });
+    const withoutCommands = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
+    if (withoutCommands.type !== "snapshot") return yield* Effect.die("Missing snapshot");
+    assert.deepEqual(withoutCommands.config.providers[0]?.slashCommands, []);
+    assert.deepEqual(withoutCommands.config.providers[0]?.skills, []);
 
     yield* server.write(0, {
       _tag: "Request",

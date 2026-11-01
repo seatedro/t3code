@@ -1933,6 +1933,10 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
     /** With on-demand snapshots, also omit machine slash commands and skills a cwd snapshot replaces. */
     providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
+    /** For clients without keyboard shortcuts: empty keybindings and no keybinding updates. */
+    withoutKeybindings: Schema.optional(Schema.Boolean),
+    /** For clients without a command menu: providers without slash commands or skills. */
+    withoutProviderCommands: Schema.optional(Schema.Boolean),
   }),
   success: ServerConfigStreamEvent,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),

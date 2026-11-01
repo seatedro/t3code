@@ -5,6 +5,7 @@ import {
   type ServerConfigStreamEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -1576,6 +1577,7 @@ describe("EnvironmentSupervisor routes", () => {
       };
       const checking = yield* Ref.make(0);
       const checkingBoth = yield* Deferred.make<void>();
+      const tailnetPreparedAt = yield* Ref.make<number | null>(null);
       const harness = yield* makeHarness({
         checkRoute: (route) =>
           Ref.updateAndGet(checking, (count) => count + 1).pipe(
@@ -1593,7 +1595,10 @@ describe("EnvironmentSupervisor routes", () => {
           target._tag === "BearerConnectionTarget" &&
           target.connectionId === LAN_TARGET.connectionId
             ? Effect.never
-            : Effect.succeed(preparedFor(target)),
+            : Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) => Ref.set(tailnetPreparedAt, now)),
+                Effect.as(preparedFor(target)),
+              ),
       });
       const supervisor = yield* EnvironmentSupervisor.make(entry, {
         initiallyDesired: true,
@@ -1607,6 +1612,41 @@ describe("EnvironmentSupervisor routes", () => {
           Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target,
         ),
       ).toBe("bearer:tailnet");
+      // It starts when it answers, not when the dead route's check gives up.
+      expect(yield* Ref.get(tailnetPreparedAt)).toBe(700);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("lets a direct route that answers after the head start take over from relay", () =>
+    Effect.gen(function* () {
+      const checkingLan = yield* Deferred.make<void>();
+      const attempted: Array<string> = [];
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Deferred.succeed(checkingLan, undefined).pipe(
+                Effect.andThen(Effect.sleep("600 millis")),
+                Effect.as("answered" as const),
+              )
+            : Effect.succeed("unchecked"),
+        prepare: (_attempt, target) => {
+          attempted.push(target._tag);
+          return target._tag === "RelayConnectionTarget"
+            ? Effect.sleep("3 seconds").pipe(Effect.as(preparedFor(target)))
+            : Effect.succeed(preparedFor(target));
+        },
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* Deferred.await(checkingLan);
+      yield* TestClock.adjust("3600 millis");
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "BearerConnectionTarget",
+      );
+      expect(attempted).toEqual(["RelayConnectionTarget", "BearerConnectionTarget"]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
