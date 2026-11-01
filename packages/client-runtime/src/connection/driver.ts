@@ -1,3 +1,4 @@
+import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -48,9 +49,9 @@ export type RouteCheck = "answered" | "silent" | "unchecked";
 export type RoutePreflight = "ready" | "unprepared" | "silent" | "unchecked";
 
 const ROUTE_CHECK_TIMEOUT_MS = 2_500;
-// Preferred direct routes share one head start, so a relay connection does not
-// wait the full probe timeout for a LAN the device has already left. A route
-// that misses it connects over relay, then upgrades with a second reconnect.
+// Preferred direct routes share one head start, so a relay or SSH connection
+// does not wait the full probe timeout for a LAN the device has already left.
+// A route that answers later still takes over while that fallback connects.
 const ROUTE_CHECK_HEAD_START_MS = 500;
 
 export class ConnectionDriver extends Context.Service<
@@ -99,7 +100,25 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     }
     return result;
   });
-  const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
+  interface SilentRoute {
+    readonly route: ConnectionRoute;
+    readonly index: number;
+  }
+  const silent: Array<SilentRoute> = [];
+  // Succeeds with the first silent route whose check answers, and fails once none can.
+  const firstAnswer = (candidates: ReadonlyArray<SilentRoute>) =>
+    candidates.length === 0
+      ? Effect.fail(undefined)
+      : Effect.raceAll(
+          candidates.map((candidate) =>
+            Fiber.join(checks[candidate.index]!).pipe(
+              Effect.flatMap((check) =>
+                check === "answered" ? Effect.succeed(candidate) : Effect.fail(undefined),
+              ),
+            ),
+          ),
+        );
+  const deferred: Array<ConnectionRoute> = [];
   for (const [index, route] of routes.entries()) {
     const check =
       checks.length === 0
@@ -112,21 +131,44 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       silent.push({ route, index });
       continue;
     }
-    const result = yield* attempt(route);
-    if (result._tag === "Success") return result.success;
+    // An unchecked route (relay, SSH) starts once the head start is spent, but a
+    // preferred route that answers before it connects takes over, so a check a
+    // few milliseconds late on a slow link does not cost the slower route.
+    const outcome =
+      check === "unchecked" && silent.length > 0
+        ? yield* Effect.raceFirst(
+            attempt(route),
+            firstAnswer(silent).pipe(
+              Effect.catch(() => Effect.never),
+              Effect.as("preempted" as const),
+            ),
+          )
+        : yield* attempt(route);
+    if (outcome === "preempted") {
+      deferred.push(...routes.slice(index));
+      break;
+    }
+    if (outcome._tag === "Success") return outcome.success;
     // An incompatible server is the same server on every route.
+    if (outcome.failure.reason === "unsupported") return yield* outcome.failure;
+  }
+  // Silent routes go in the order their checks answer, without waiting for a
+  // route that is still dead, which can hold an attempt open far longer than its probe.
+  let unanswered = silent;
+  while (true) {
+    const answered = yield* firstAnswer(unanswered).pipe(Effect.option);
+    if (answered._tag === "None") break;
+    unanswered = unanswered.filter((candidate) => candidate !== answered.value);
+    const result = yield* attempt(answered.value.route);
+    if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
-  const late = yield* Effect.forEach(silent, ({ index }) => Fiber.join(checks[index]!), {
-    concurrency: "unbounded",
-  });
-  const answeredLate = silent.filter((_, position) => late[position] !== "silent");
-  const stillSilent = silent.filter((_, position) => late[position] === "silent");
-  for (const { route } of [...answeredLate, ...stillSilent]) {
+  const stillSilent = unanswered.map((candidate) => candidate.route);
+  for (const route of [...deferred, ...stillSilent]) {
     // A route still silent after its whole check can hold the attempt open far
     // longer than the check did. Once another route failed in a way that
     // retries, the retry reaches it sooner than waiting here would.
-    if (transient !== undefined && stillSilent.some((entry) => entry.route === route)) break;
+    if (transient !== undefined && stillSilent.includes(route)) break;
     const result = yield* attempt(route);
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
@@ -150,7 +192,12 @@ export const make = Effect.gen(function* () {
 
   // The descriptor is public, so this sends no credential to whatever
   // answers at a saved LAN address on a different network.
-  const checkDescriptor = (httpBaseUrl: string, environmentId: string, keepsItsHost: boolean) =>
+  const checkDescriptor = (
+    httpBaseUrl: string,
+    environmentId: string,
+    keepsItsHost: boolean,
+    onAnswer: (descriptor: ExecutionEnvironmentDescriptor) => void = () => {},
+  ) =>
     fetchRemoteEnvironmentDescriptor({
       httpBaseUrl,
       timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
@@ -161,20 +208,31 @@ export const make = Effect.gen(function* () {
       Effect.tap((descriptor) =>
         remote.rememberCheckedDescriptor(httpBaseUrl, descriptor, keepsItsHost),
       ),
-      Effect.map((descriptor): RouteCheck =>
-        Option.exists(descriptor, (value) => value.environmentId === environmentId)
-          ? "answered"
-          : "silent",
-      ),
+      Effect.map((descriptor): RouteCheck => {
+        if (Option.isNone(descriptor) || descriptor.value.environmentId !== environmentId) {
+          return "silent";
+        }
+        onAnswer(descriptor.value);
+        return "answered";
+      }),
       // A cached descriptor would answer for a host that cannot be reached.
       Effect.provideService(FetchHttpClient.RequestInit, { cache: "no-store" }),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
 
-  const checkRoute = (entry: ConnectionCatalogEntry, route: ConnectionRoute) => {
+  const checkRoute = (
+    entry: ConnectionCatalogEntry,
+    route: ConnectionRoute,
+    onAnswer?: (descriptor: ExecutionEnvironmentDescriptor) => void,
+  ) => {
     const httpBaseUrl = routeHttpBaseUrl(route);
     if (httpBaseUrl === null) return Effect.succeed<RouteCheck>("unchecked");
-    return checkDescriptor(httpBaseUrl, entry.target.environmentId, routeKeepsItsHost(route)).pipe(
+    return checkDescriptor(
+      httpBaseUrl,
+      entry.target.environmentId,
+      routeKeepsItsHost(route),
+      onAnswer,
+    ).pipe(
       Effect.withSpan("ConnectionDriver.checkRoute", {
         attributes: { "connection.target.kind": route.target._tag },
       }),
@@ -203,13 +261,15 @@ export const make = Effect.gen(function* () {
       "connection.route.count": connectionRoutes(entry).length,
     });
     yield* reportProgress({ stage: "preparing" });
+    // A route's check already fetched its descriptor, so its attempt skips fetching it again.
+    const checked = new Map<ConnectionRoute, ExecutionEnvironmentDescriptor>();
     return yield* connectOverRoutes(
       entry,
-      (route) => checkRoute(entry, route),
+      (route) => checkRoute(entry, route, (descriptor) => checked.set(route, descriptor)),
       Effect.fnUntraced(
         function* (route) {
           yield* reportProgress({ stage: "preparing" });
-          const prepared = yield* resolver.prepare(routeEntry(entry, route));
+          const prepared = yield* resolver.prepare(routeEntry(entry, route), checked.get(route));
           yield* ConnectionTimings.markPrepared; // temp: connection timings
           yield* reportProgress({ stage: "opening", prepared });
           const session = yield* sessions.connect(prepared);

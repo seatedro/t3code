@@ -2028,6 +2028,10 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     providerCatalogDigests: Schema.optional(Schema.Boolean),
     /** Send provider changes as `providerStatusDeltas`; older clients reject the event type. */
     providerStatusDeltas: Schema.optional(Schema.Boolean),
+    /** For clients without keyboard shortcuts: empty keybindings and no keybinding updates. */
+    withoutKeybindings: Schema.optional(Schema.Boolean),
+    /** For clients without a command menu: providers without slash commands or skills. */
+    withoutProviderCommands: Schema.optional(Schema.Boolean),
   }),
   success: ServerConfigStreamEvent,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
