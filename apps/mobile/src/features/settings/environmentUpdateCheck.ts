@@ -8,6 +8,7 @@ import { findEnvironmentUpdate } from "./environment-maintenance";
 export interface EnvironmentReleaseCheck {
   readonly fromVersion: string;
   readonly targetVersion: string | null;
+  readonly note: string | null;
 }
 
 const asError = (cause: unknown) =>
@@ -23,7 +24,7 @@ export const environmentReleaseCheckAtom = Atom.family((environmentId: Environme
   Atom.fn((readServerVersion: () => Promise<string>) =>
     Effect.gen(function* () {
       const fromVersion = yield* Effect.tryPromise({ try: readServerVersion, catch: asError });
-      const targetVersion = yield* Effect.tryPromise({
+      const update = yield* Effect.tryPromise({
         try: (signal) => findEnvironmentUpdate(fromVersion, signal),
         catch: asError,
       }).pipe(
@@ -32,7 +33,7 @@ export const environmentReleaseCheckAtom = Atom.family((environmentId: Environme
           orElse: () => Effect.fail(new Error("Checking for updates timed out. Try again.")),
         }),
       );
-      return { fromVersion, targetVersion } satisfies EnvironmentReleaseCheck;
+      return { fromVersion, ...update } satisfies EnvironmentReleaseCheck;
     }),
   ).pipe(Atom.withLabel(`mobile:environment-release-check:${environmentId}`)),
 );
