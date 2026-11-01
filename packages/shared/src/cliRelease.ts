@@ -5,6 +5,7 @@ import { compareSemverVersions } from "./semver.ts";
 
 // Fork: `t3 update`, the boot service and installs read this fork's releases.
 const CLI_RELEASE_REPOSITORY = "seatedro/t3code";
+/** @public Fork: Flock mobile (seatedro/flock) imports it. */
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
@@ -152,6 +153,68 @@ export function newestCliReleaseVersion(
     if (cliReleaseChannelOf(version) === channel) return version;
   }
   return undefined;
+}
+
+const Release = Schema.Struct({
+  tag_name: Schema.String,
+  draft: Schema.optionalKey(Schema.Boolean),
+});
+const decodeLatestRelease = Schema.decodeUnknownOption(Schema.fromJsonString(Release));
+const decodeReleases = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Release)));
+const FEED_TAG = /<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g;
+
+export type FetchReleaseText = (
+  url: string,
+  init: { readonly signal: AbortSignal; readonly headers: Record<string, string> },
+) => Promise<Pick<Response, "ok" | "status" | "text">>;
+
+async function getText(
+  fetchText: FetchReleaseText,
+  url: string,
+  accept: string,
+  signal: AbortSignal,
+) {
+  const response = await fetchText(url, { signal, headers: { Accept: accept } });
+  if (!response.ok) throw new Error(`Could not check releases (${response.status}). Try again.`);
+  return response.text();
+}
+
+/** Newest release on a channel, or null when the channel has none. Public release pages come
+ * first because devices on one network share the API's anonymous quota. */
+export async function findLatestCliRelease(
+  channel: CliReleaseChannel,
+  signal: AbortSignal,
+  fetchText: FetchReleaseText,
+): Promise<string | null> {
+  const first =
+    channel === "stable"
+      ? // A repository without a stable release redirects /latest to its HTML release list.
+        Option.toArray(
+          decodeLatestRelease(
+            await getText(fetchText, `${CLI_RELEASES_PAGE_URL}/latest`, "application/json", signal),
+          ),
+        )
+      : Array.from(
+          (
+            await getText(
+              fetchText,
+              `${CLI_RELEASES_PAGE_URL}.atom`,
+              "application/atom+xml",
+              signal,
+            )
+          ).matchAll(FEED_TAG),
+          ([, tag_name = ""]) => ({ tag_name }),
+        );
+  let version = newestCliReleaseVersion(first, channel);
+  // The feed holds only the newest ten releases, which nightlies can fill.
+  for (let page = 1; version === undefined; page++) {
+    const releases = decodeReleases(
+      await getText(fetchText, cliReleaseIndexPageUrl(page), "application/vnd.github+json", signal),
+    );
+    version = newestCliReleaseVersion(releases, channel);
+    if (releases.length < 100) break;
+  }
+  return version ?? null;
 }
 
 const NpmReleaseMigrationManifest = Schema.Struct({
