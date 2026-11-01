@@ -23,6 +23,12 @@ export interface ProviderTotals {
   readonly sessions: number;
   readonly costShare: number;
   readonly tokenShare: number;
+  readonly speedPremiumUsd: number;
+}
+
+export interface PeriodTotals {
+  readonly costUsd: number;
+  readonly totalTokens: number;
 }
 
 export interface ModelTotals {
@@ -36,6 +42,8 @@ export interface ModelTotals {
   readonly unpricedTokens: number;
   readonly costShare: number;
   readonly tokenShare: number;
+  /** Keyed by `hourStart` for hourly windows, otherwise by day. */
+  readonly byPeriod: ReadonlyMap<string, PeriodTotals>;
 }
 
 /** When every record lacks rates, costUsd is unknown and must not be displayed as a dollar figure. */
@@ -377,7 +385,13 @@ export function mergeUsage(
 
   const providerAccumulator = new Map<
     UsageProviderKind,
-    { costUsd: number; totalTokens: number; records: number; sessions: number }
+    {
+      costUsd: number;
+      totalTokens: number;
+      records: number;
+      sessions: number;
+      speedPremiumUsd: number;
+    }
   >();
   const modelAccumulator = new Map<
     string,
@@ -389,6 +403,7 @@ export function mergeUsage(
       records: number;
       unpricedRecords: number;
       unpricedTokens: number;
+      byPeriod: Map<string, { costUsd: number; totalTokens: number }>;
     }
   >();
   const dailyAccumulator = new Map<
@@ -429,6 +444,7 @@ export function mergeUsage(
         totalTokens: 0,
         records: 0,
         sessions: 0,
+        speedPremiumUsd: 0,
       };
       provider.sessions += providerSessions;
       providerAccumulator.set(providerKind, provider);
@@ -462,10 +478,12 @@ export function mergeUsage(
         totalTokens: 0,
         records: 0,
         sessions: 0,
+        speedPremiumUsd: 0,
       };
       provider.costUsd += bucket.costUsd;
       provider.totalTokens += tokens;
       provider.records += bucket.records;
+      provider.speedPremiumUsd += bucket.speedPremiumUsd ?? 0;
       providerAccumulator.set(bucket.provider, provider);
 
       const modelKey = `${bucket.provider} ${bucket.model}`;
@@ -483,6 +501,7 @@ export function mergeUsage(
         records: 0,
         unpricedRecords: 0,
         unpricedTokens: 0,
+        byPeriod: new Map<string, { costUsd: number; totalTokens: number }>(),
       };
       model.costUsd += bucket.costUsd;
       model.totalTokens += tokens;
@@ -500,6 +519,11 @@ export function mergeUsage(
       } else if (bucket.records > 0) {
         model.unpricedTokens += (tokens * bucket.unpricedRecords) / bucket.records;
       }
+      const periodKey = bucket.hourStart ?? bucket.day;
+      const modelPeriod = model.byPeriod.get(periodKey) ?? { costUsd: 0, totalTokens: 0 };
+      modelPeriod.costUsd += bucket.costUsd;
+      modelPeriod.totalTokens += tokens;
+      model.byPeriod.set(periodKey, modelPeriod);
       modelAccumulator.set(modelKey, model);
 
       const day = dailyAccumulator.get(bucket.day) ?? {
@@ -548,6 +572,7 @@ export function mergeUsage(
       sessions: totals.sessions,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
+      speedPremiumUsd: totals.speedPremiumUsd,
     }))
     .sort((a, b) => b.costUsd - a.costUsd);
 
@@ -563,6 +588,7 @@ export function mergeUsage(
       unpricedTokens: totals.unpricedTokens,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
+      byPeriod: totals.byPeriod,
     }))
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
 
