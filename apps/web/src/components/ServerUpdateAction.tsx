@@ -32,7 +32,7 @@ import { useManagedPolicy } from "~/state/managedPolicy";
 import { environmentPresentations } from "~/state/presentation";
 import { ManagedControl } from "./ManagedPolicy";
 import { manualServerUpdateCommand } from "~/versionSkew";
-import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASES_ON_NPM, crossesReleaseTrack } from "@t3tools/shared/cliRelease";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -276,8 +276,11 @@ export function ServerUpdateAction({
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
   const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId));
   const update = useServerUpdate();
+  // `t3 update` and npm's global install both replace the installed t3; the rest only relaunch.
   const updatesInstall =
-    installation?.kind === "npm-global" || installation?.kind === "t3-launcher";
+    installation?.kind === "npm-global" ||
+    installation?.kind === "t3-launcher" ||
+    !CLI_RELEASES_ON_NPM;
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
     target: updatesInstall ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
