@@ -24,6 +24,7 @@ import {
   type ConnectionAttemptError,
 } from "../connection/model.ts";
 import { isNearbyAddress } from "../connection/routes.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -212,6 +213,7 @@ export const make = Effect.gen(function* () {
       }
       return descriptor;
     },
+    ConnectionTimings.step("descriptor"), // temp: connection timings
   );
 
   const authorizeBearer = Effect.fn("clientRuntime.connection.remote.authorizeBearer")(
@@ -234,6 +236,7 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
+        ConnectionTimings.step("ticket"), // temp: connection timings
       );
       return {
         environmentId: descriptor.environmentId,
@@ -275,6 +278,7 @@ export const make = Effect.gen(function* () {
       });
     },
     Effect.provideService(HttpClient.HttpClient, httpClient),
+    ConnectionTimings.step("ticket"), // temp: connection timings
   );
 
   const sessionChanged = () =>
@@ -518,7 +522,7 @@ export const make = Effect.gen(function* () {
     const issued = yield* selected.issued;
     yield* assertSession(identity);
     return { ...issued, fromCache: selected.fromCache, identity };
-  });
+  }, ConnectionTimings.step("token")); // temp: connection timings
 
   const httpAuthorization = (
     token: TokenStore.RemoteDpopAccessToken,
