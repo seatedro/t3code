@@ -5,6 +5,7 @@ import type {
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { CLI_RELEASES_ON_NPM } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 
@@ -97,8 +98,10 @@ export function supportsDesktopAppUpdate(
 
 export function manualServerUpdateCommand(
   targetVersion: string,
-  installation?: ServerInstallation,
+  installation: ServerInstallation | undefined,
+  releasesOnNpm = CLI_RELEASES_ON_NPM,
 ): string {
+  if (!releasesOnNpm) return "t3 update";
   if (installation?.kind === "npm-global") {
     const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
     return `npm install --global --prefix ${prefix} t3@${targetVersion}`;

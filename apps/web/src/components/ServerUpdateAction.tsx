@@ -28,7 +28,7 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
 import { useServerConfigs } from "~/state/entities";
-import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASES_ON_NPM, crossesReleaseTrack } from "@t3tools/shared/cliRelease";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -250,17 +250,17 @@ export function ServerUpdateAction({
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = canUpdateServer(useAtomValue(sessionStateAtom));
   const update = useServerUpdate();
+  // `t3 update` and npm's global install both replace the installed t3; the rest only relaunch.
+  const updatesInstall = installation?.kind === "npm-global" || !CLI_RELEASES_ON_NPM;
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
+    target: updatesInstall ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title:
-          installation?.kind === "npm-global" ? "Update command copied" : "Relaunch command copied",
-        description:
-          installation?.kind === "npm-global"
-            ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
-            : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
+        title: updatesInstall ? "Update command copied" : "Relaunch command copied",
+        description: updatesInstall
+          ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
+          : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
       });
     },
     onError: (error) => {
@@ -314,7 +314,7 @@ export function ServerUpdateAction({
     selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
   const actionLabel =
     manualCommand !== null
-      ? installation?.kind === "npm-global"
+      ? updatesInstall
         ? "Copy update command"
         : "Copy relaunch command"
       : label;
