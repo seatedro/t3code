@@ -623,6 +623,16 @@ it.layer(TestLayer)("compact bounded snapshot transport", (it) => {
             );
           const bounded = { acceptBoundedSnapshot: true, acceptCompactTurnItems: true };
           for (const mode of [bounded, {}]) {
+            const firstChunk = yield* subscribeOrchestrationV2Thread({
+              threadId: BODIES,
+              ...mode,
+              requestCompletionMarker: true,
+            }).pipe(Effect.flatMap((stream) => Stream.runHead(Stream.chunks(stream))));
+            // Each stream chunk is one RPC chunk; the marker must not wait an ACK round trip.
+            assert.deepStrictEqual(
+              firstChunk._tag === "Some" ? firstChunk.value.map((item) => item.kind) : [],
+              ["snapshot", "synchronized"],
+            );
             const [plainSnapshot, ...plainTail] = yield* subscribe(mode);
             const [dedupedSnapshot, ...dedupedTail] = yield* subscribe({
               ...mode,

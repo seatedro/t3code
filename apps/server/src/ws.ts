@@ -935,9 +935,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         );
 
     const completionMarker =
-      input.requestCompletionMarker === true
-        ? Stream.make({ kind: "synchronized" as const })
-        : Stream.empty;
+      input.requestCompletionMarker === true ? { kind: "synchronized" as const } : undefined;
 
     const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
       const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
@@ -975,8 +973,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
             };
           })();
-      return rpcInitialItems([snapshotItem]).pipe(
-        Stream.concat(completionMarker),
+      return rpcInitialItems([snapshotItem], completionMarker).pipe(
         Stream.concat(eventStreamFrom(snapshotSequence)),
         withLiveDedupe,
       );
@@ -1077,8 +1074,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
       if (plan.mode === "snapshot") {
         return yield* snapshotThenLive();
       }
-      return rpcInitialItems(replay).pipe(
-        Stream.concat(completionMarker),
+      return rpcInitialItems(replay, completionMarker).pipe(
         Stream.concat(eventStreamFrom(highWater)),
         withLiveDedupe,
       );
@@ -1264,39 +1260,19 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
     // Subscribe before loading for racing enrichments; initial refresh covers pre-subscription completions and cold HTTP snapshots.
     const completionMarker =
-      input.requestCompletionMarker === true
-        ? Stream.make({ kind: "synchronized" as const })
-        : Stream.empty;
+      input.requestCompletionMarker === true ? { kind: "synchronized" as const } : undefined;
     const initialSnapshotItems = (loaded: {
       readonly snapshot: OrchestrationV2ShellSnapshot;
       readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
-    }) =>
-      rpcInitialItems(
-        shellStreamItemsFromInitialSnapshot({
-          snapshot: loaded.snapshot,
-          resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
-        }),
-      );
-    const initialEnrichmentItems = (loaded: {
-      readonly snapshot: OrchestrationV2ShellSnapshot;
-      readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
-    }) =>
-      rpcInitialItems(
-        shellStreamItemsFromResumeSnapshot({
-          snapshot: loaded.snapshot,
-          resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
-        }),
-      );
+    }) => rpcInitialItems(shellStreamItemsFromInitialSnapshot(loaded), completionMarker);
     // Drain initial frames before merging enrichment with live events so marked refreshes cannot precede the initial frame.
-    const completionThenLive = (afterSequence: number) =>
-      Stream.concat(completionMarker, liveFrom(afterSequence));
 
     const stream = yield* Effect.gen(function* () {
       if (input.afterSequence === undefined) {
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
-          tail: completionThenLive(loaded.snapshot.snapshotSequence),
+          tail: liveFrom(loaded.snapshot.snapshotSequence),
           enrichment: enrichmentRefreshes,
         });
       }
@@ -1305,7 +1281,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
-          tail: completionThenLive(loaded.snapshot.snapshotSequence),
+          tail: liveFrom(loaded.snapshot.snapshotSequence),
           enrichment: enrichmentRefreshes,
         });
       });
@@ -1332,10 +1308,14 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       if (input.afterSequence < (yield* applicationEvents.prunedThroughSequence)) {
         return yield* fromSnapshot;
       }
-      const replay = toShellStream(Stream.fromIterable(replayed));
+      // Collect the bounded replay so metadata, deltas and the marker share one RPC chunk.
+      const replay = yield* toShellStream(Stream.fromIterable(replayed)).pipe(Stream.runCollect);
       return composeShellStreamWithEnrichment({
-        initial: initialEnrichmentItems(loaded),
-        tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
+        initial: rpcInitialItems(
+          [...shellStreamItemsFromResumeSnapshot(loaded), ...replay],
+          completionMarker,
+        ),
+        tail: liveFrom(highWater),
         enrichment: enrichmentRefreshes,
       });
     }).pipe(
