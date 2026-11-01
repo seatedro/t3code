@@ -204,7 +204,7 @@ export function formatHourShort(hourStart: string, timeZone?: string, hour12 = t
   return formatHour(zonedHourFormat, instant, hour12);
 }
 
-export function formatDateTimeShort(instant: string, timeZone?: string, hour12 = true): string {
+function formatDateTimeShort(instant: string, timeZone?: string, hour12 = true): string {
   const date = new Date(instant);
   if (Number.isNaN(date.getTime())) return instant;
   const dateHourFormat = dateTimeFormatter("en-US", {
