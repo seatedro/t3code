@@ -104,6 +104,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.memoryPrune]: "memory",
   [WS_METHODS.memoryForget]: "memory",
   [WS_METHODS.memoryPurge]: "memory",
+  [WS_METHODS.pushRegisterDevice]: "push",
+  [WS_METHODS.pushUnregisterDevice]: "push",
   [WS_METHODS.secretsAnswerRequest]: "secrets",
   [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",

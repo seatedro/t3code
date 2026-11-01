@@ -66,6 +66,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.memoryPrune]: AuthSettingsWriteScope,
   [WS_METHODS.memoryForget]: AuthSettingsWriteScope,
   [WS_METHODS.memoryPurge]: AuthSettingsWriteScope,
+  // A push carries thread titles and states, which reading threads already shows.
+  [WS_METHODS.pushRegisterDevice]: AuthOrchestrationReadScope,
+  [WS_METHODS.pushUnregisterDevice]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   // Force stop kills agent processes, as Stop on a terminal does.
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,

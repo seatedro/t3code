@@ -418,6 +418,11 @@ import {
   MemoryPruneInput,
   MemoryPurgeResult,
 } from "./memory.ts";
+import {
+  PushDeviceError,
+  PushDeviceRegisterInput,
+  PushDeviceUnregisterInput,
+} from "./pushDevices.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -570,6 +575,9 @@ export const WS_METHODS = {
   memoryPrune: "memory.prune",
   memoryForget: "memory.forget",
   memoryPurge: "memory.purge",
+
+  pushRegisterDevice: "push.registerDevice",
+  pushUnregisterDevice: "push.unregisterDevice",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -2064,6 +2072,18 @@ const WsMemoryPurgeRpc = Rpc.make(WS_METHODS.memoryPurge, {
   error: MemoryRpcError,
 });
 
+const PushDeviceRpcError = Schema.Union([PushDeviceError, EnvironmentAuthorizationError]);
+
+const WsPushRegisterDeviceRpc = Rpc.make(WS_METHODS.pushRegisterDevice, {
+  payload: PushDeviceRegisterInput,
+  error: PushDeviceRpcError,
+});
+
+const WsPushUnregisterDeviceRpc = Rpc.make(WS_METHODS.pushUnregisterDevice, {
+  payload: PushDeviceUnregisterInput,
+  error: PushDeviceRpcError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
@@ -2137,6 +2157,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsMemoryPruneRpc,
   WsMemoryForgetRpc,
   WsMemoryPurgeRpc,
+  WsPushRegisterDeviceRpc,
+  WsPushUnregisterDeviceRpc,
   WsServerReportClientActivityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
