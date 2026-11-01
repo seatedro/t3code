@@ -28,6 +28,7 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import { inflatingJson, withFrameCompressionRequest } from "@t3tools/shared/rpcFrameCompression";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
@@ -241,7 +242,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       });
       return socket;
     };
-    const socketUrl = new URL(connection.socketUrl);
+    // Servers deflate frames themselves only for sockets that offered no permessage-deflate.
+    const socketUrl = new URL(withFrameCompressionRequest(connection.socketUrl));
     socketUrl.searchParams.set(SOCKET_FRAME_PARTS_QUERY_PARAM, "1");
     const layerSocket = Layer.effect(
       Socket.Socket,
@@ -277,7 +279,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Layer.provide(
         Layer.mergeAll(
           layerSocket,
-          RpcSerialization.layerJson,
+          Layer.succeed(RpcSerialization.RpcSerialization, inflatingJson),
           Layer.succeed(RpcClient.ConnectionHooks, hooks),
         ),
       ),
