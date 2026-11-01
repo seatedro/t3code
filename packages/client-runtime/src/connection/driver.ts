@@ -25,6 +25,7 @@ import {
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import * as ConnectionTimings from "./timings.ts"; // temp: connection timings
 
 export type ConnectionDriverProgress =
   | {
@@ -192,30 +193,34 @@ export const make = Effect.gen(function* () {
     return yield* connectOverRoutes(
       entry,
       (route) => checkRoute(entry, route),
-      Effect.fnUntraced(function* (route) {
-        const prepared = yield* resolver.prepare(routeEntry(entry, route));
-        yield* reportProgress({ stage: "opening", prepared });
-        const session = yield* sessions.connect(prepared);
-        yield* reportProgress({ stage: "synchronizing", prepared });
-        yield* session.ready;
-        // The server closes a socket when its session expires, unless the same key renewed it.
-        if (prepared.httpAuthorization?._tag === "Dpop") {
-          yield* remote
-            .renewDpopBeforeExpiry({
-              expectedEnvironmentId: prepared.environmentId,
-              expiresAtEpochMs: prepared.httpAuthorization.expiresAtEpochMs,
-            })
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("Could not renew the connection's credential.", { error }),
-              ),
-              Effect.forkScoped,
-            );
-        }
-        return { prepared, session } satisfies EnvironmentConnectionLease;
-      }),
+      Effect.fnUntraced(
+        function* (route) {
+          const prepared = yield* resolver.prepare(routeEntry(entry, route));
+          yield* ConnectionTimings.markPrepared; // temp: connection timings
+          yield* reportProgress({ stage: "opening", prepared });
+          const session = yield* sessions.connect(prepared);
+          yield* reportProgress({ stage: "synchronizing", prepared });
+          yield* session.ready;
+          // The server closes a socket when its session expires, unless the same key renewed it.
+          if (prepared.httpAuthorization?._tag === "Dpop") {
+            yield* remote
+              .renewDpopBeforeExpiry({
+                expectedEnvironmentId: prepared.environmentId,
+                expiresAtEpochMs: prepared.httpAuthorization.expiresAtEpochMs,
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not renew the connection's credential.", { error }),
+                ),
+                Effect.forkScoped,
+              );
+          }
+          return { prepared, session } satisfies EnvironmentConnectionLease;
+        },
+        ConnectionTimings.measureAttempt, // temp: connection timings
+      ),
     );
-  });
+  }, ConnectionTimings.measureConnect); // temp: connection timings
 
   const preflight = (entry: ConnectionCatalogEntry, route: ConnectionRoute) =>
     (sendsTokenInClear(connectionRoutes(entry), route)

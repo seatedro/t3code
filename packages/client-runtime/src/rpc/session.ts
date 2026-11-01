@@ -46,6 +46,7 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
@@ -276,6 +277,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     // Building the protocol only starts the socket; this span times the
     // handshake up to the first open, without making `connect` wait for it.
     yield* Deferred.await(connected).pipe(
+      Effect.andThen(ConnectionTimings.markSocketOpen), // temp: connection timings
       Effect.raceFirst(Deferred.await(disconnected)),
       Effect.withSpan("environment.websocket.open"),
       Effect.ignore,

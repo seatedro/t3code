@@ -9,6 +9,7 @@ import { HttpClient, HttpClientError, type HttpClientResponse } from "effect/htt
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import {
   executeAuthenticatedEnvironmentHttpRequest,
@@ -114,7 +115,7 @@ export const layer: Layer.Layer<ShellSnapshotLoader, never, HttpClient.HttpClien
           ...(options?.omitOlderSettled === true ? { omitOlderSettled: true } : {}),
         }).pipe(
           Effect.map(Option.some<DeferredShellSnapshot>),
-          Effect.provideService(HttpClient.HttpClient, httpClient),
+          ConnectionTimings.measureShellSnapshot(prepared, httpClient), // temp: connection timings
           Effect.catchCause((cause) =>
             Effect.logWarning(
               "Could not load the environment shell snapshot over HTTP; using the socket snapshot instead.",

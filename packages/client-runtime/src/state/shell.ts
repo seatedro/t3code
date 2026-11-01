@@ -29,6 +29,7 @@ import { runCachePersistence } from "./cachePersistence.ts";
 import { subscribeDynamicWithSession } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import type { DeferredShellSnapshot } from "./shellPullRequests.ts";
 import {
   applyShellStreamEvents,
@@ -302,6 +303,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       yield* Ref.set(latestLiveSnapshot, next.snapshot);
     }
     yield* SubscriptionRef.set(state, next);
+    if (receivedAuthoritativeSnapshot) {
+      ConnectionTimings.markShellSnapshotApplied(environmentId); // temp: connection timings
+    }
     if (receivedAuthoritativeSnapshot && omission !== null) {
       yield* Ref.set(authoritativeOmission, omission);
     }

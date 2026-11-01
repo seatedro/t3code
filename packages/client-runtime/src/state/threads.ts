@@ -48,6 +48,7 @@ import {
   type ThreadHistoryMeta,
 } from "./threadHistoryMerge.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
@@ -219,6 +220,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
+  const openTiming = ConnectionTimings.startThreadOpen(environmentId, threadId); // temp: connection timings
   const candidate = resumeCache?.snapshot;
   const retained =
     candidate &&
@@ -249,6 +251,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     (snapshot) => !hasMissingPendingQuestionCard(snapshot.projection),
   );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.projection);
+  openTiming.cached(retained ? "memory" : Option.isSome(cached) ? "disk" : "none"); // temp: connection timings
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
   const initialSequence =
@@ -624,6 +627,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
     item: OrchestrationV2ThreadStreamItem,
   ) {
+    openTiming.item(item.kind); // temp: connection timings
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
