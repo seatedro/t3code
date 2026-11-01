@@ -2042,6 +2042,9 @@ importers:
       ffi-rs:
         specifier: 1.3.2
         version: 1.3.2
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       mdast-util-directive:
         specifier: 'catalog:'
         version: 3.1.0(supports-color@8.1.1)
@@ -2054,6 +2057,9 @@ importers:
       micromark-util-character:
         specifier: 'catalog:'
         version: 2.1.1
+      pako:
+        specifier: 3.0.3
+        version: 3.0.3
       property-information:
         specifier: ^7.2.0
         version: 7.2.0
@@ -10424,6 +10430,9 @@ packages:
 
   pako@1.0.11:
     resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
+
+  pako@3.0.3:
+    resolution: {integrity: sha512-tmrebBBYI5FOw8QICGwJNqE8fotC8R+gwcxOvoFNv+GKehOI6Lc6YBolNcQNnC4v96l1wt7rh102ifD4kVeZAQ==}
 
   parse-entities@4.0.2:
     resolution: {integrity: sha512-GG2AQYWoLgL877gQIKeRPGO1xF9+eG1ujIb5soS5gPvLQ1y2o8FL90w2QWNdf9I361Mpp7726c+lj3U0qK1uGw==}
@@ -20544,6 +20553,8 @@ snapshots:
   package-manager-detector@1.8.0: {}
 
   pako@1.0.11: {}
+
+  pako@3.0.3: {}
 
   parse-entities@4.0.2:
     dependencies:
