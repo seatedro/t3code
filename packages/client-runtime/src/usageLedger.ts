@@ -5,7 +5,7 @@ import {
   type UsageProviderKind,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import { enumerateDays, enumerateHourStarts } from "@t3tools/shared/usageFormat";
+import { enumerateDays, enumerateHourStarts, formatUsd } from "@t3tools/shared/usageFormat";
 import {
   cursorUsageWindowDetails,
   displayLimitWindows,
@@ -67,7 +67,7 @@ export function usageProviderOfDriver(driver: string): UsageProviderKind | null 
 }
 
 /** The day or hour starts a window covers, oldest first. */
-export function usagePeriods(window: UsageSummaryInput): readonly string[] {
+function usagePeriods(window: UsageSummaryInput): readonly string[] {
   if (window.resolution === "hour") {
     return window.sinceTime === undefined || window.untilTime === undefined
       ? []
@@ -128,6 +128,17 @@ export function previousUsageWindow(window: UsageSummaryInput): UsageSummaryInpu
     timeZone: window.timeZone,
     resolution: window.resolution ?? "day",
   };
+}
+
+const WHOLE_USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+/** An API-price estimate: whole dollars from $100, where cents are noise. */
+export function formatApproxUsd(value: number): string {
+  return value >= 100 ? WHOLE_USD.format(value) : formatUsd(value);
 }
 
 /** Fractional change (0.18 is up 18%), or null when there is nothing to compare against. */
@@ -275,7 +286,7 @@ export function usageEfficiency(merged: MergedUsage): UsageEfficiency {
 }
 
 /** At or below this share left a limit reads as low. */
-export const LIMIT_LOW_PERCENT = 15;
+const LIMIT_LOW_PERCENT = 15;
 
 export type LimitSeverity = "ok" | "low" | "out";
 
@@ -300,13 +311,14 @@ export function limitWindowLabel(pool: LimitPool, window: LimitPoolWindow): stri
   );
 }
 
-/** The word a compact limit chip shows after its percentage. */
+/** The window a compact limit chip names after its share left, as in "40% left · week". */
 export function limitWindowNoun(pool: LimitPool, window: LimitPoolWindow): string {
   const label = limitWindowLabel(pool, window);
   if (label === "Session") return "session";
   if (label === "Weekly") return "week";
   if (label === "Monthly") return "month";
-  return label.toLowerCase();
+  // Cursor's allowances read "Cursor Models" and "Other Models"; the chip keeps the first word.
+  return label.toLowerCase().replace(/ models$/, "");
 }
 
 function resetAt(window: ServerProviderUsageWindow): number | null {
@@ -338,7 +350,7 @@ export function windowRunOutAt(window: ServerProviderUsageWindow, now: number): 
 }
 
 /** A pooled window runs out when its last member does, unless a spent member refills first. */
-export function poolRunOutAt(window: LimitPoolWindow, now: number): number | null {
+function poolRunOutAt(window: LimitPoolWindow, now: number): number | null {
   const spending = window.members.filter((member) => member.window.usedPercent < 100);
   if (spending.length === 0) return null;
   let at = 0;
@@ -357,7 +369,7 @@ export function poolRunOutAt(window: LimitPoolWindow, now: number): number | nul
 
 export interface LimitHeadline {
   readonly pool: LimitPool;
-  /** Display order. */
+  /** Display order, except that a spent provider leads with the window that stopped it. */
   readonly windows: readonly LimitPoolWindow[];
   /** The tightest window: what decides whether the provider can keep working. */
   readonly binding: LimitPoolWindow;
@@ -389,7 +401,8 @@ export function limitHeadline(pool: LimitPool, now: number): LimitHeadline | nul
   }
   return {
     pool,
-    windows,
+    windows:
+      severity === "out" ? [binding, ...windows.filter((window) => window !== binding)] : windows,
     binding,
     severity,
     backAt:

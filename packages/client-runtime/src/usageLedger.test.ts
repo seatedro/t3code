@@ -18,6 +18,7 @@ import {
   previousUsageWindow,
   rankUsageModels,
   usageChange,
+  usageColumns,
   usageEfficiency,
   windowRunOutAt,
 } from "./usageLedger.ts";
@@ -133,6 +134,49 @@ describe("usageChange", () => {
     expect(usageChange(118, 100)).toBeCloseTo(0.18);
     expect(usageChange(80, 100)).toBeCloseTo(-0.2);
     expect(usageChange(50, 0)).toBeNull();
+  });
+});
+
+describe("usageColumns", () => {
+  it("keeps each provider's band absolute, in the requested order, with idle days at zero", () => {
+    const usage = merged([
+      bucket({ day: "2026-10-29" as UsageDay }),
+      bucket({
+        day: "2026-10-29" as UsageDay,
+        provider: "codex",
+        model: "gpt-6-astra",
+        costUsd: 4,
+      }),
+    ]);
+    expect(usageColumns(usage, THREE_DAYS, "cost", ["codex", "claude", "grok"])).toEqual([
+      {
+        period: "2026-10-29",
+        total: 14,
+        bands: [
+          { provider: "codex", value: 4 },
+          { provider: "claude", value: 10 },
+          { provider: "grok", value: 0 },
+        ],
+      },
+      {
+        period: "2026-10-30",
+        total: 0,
+        bands: [
+          { provider: "codex", value: 0 },
+          { provider: "claude", value: 0 },
+          { provider: "grok", value: 0 },
+        ],
+      },
+      {
+        period: "2026-10-31",
+        total: 0,
+        bands: [
+          { provider: "codex", value: 0 },
+          { provider: "claude", value: 0 },
+          { provider: "grok", value: 0 },
+        ],
+      },
+    ]);
   });
 });
 
@@ -260,6 +304,7 @@ describe("limitHeadline", () => {
       ]),
     ]);
     expect(codex.binding.kind).toBe("weekly");
+    expect(codex.windows.map((window) => window.kind)).toEqual(["weekly", "session"]);
     expect(codex.severity).toBe("out");
     expect(codex.backAt).toBe(NOW + 64 * 60 * MINUTE);
     expect(codex.runOut).toBeNull();

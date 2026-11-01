@@ -1,3 +1,5 @@
+import type { UsageSummaryInput } from "@t3tools/contracts";
+import type { UsageMetric } from "@t3tools/client-runtime/usage-ledger";
 import { formatPercent, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
 import { isModelCostUnknown, type ModelTotals } from "@t3tools/shared/usageMerge";
 
@@ -13,7 +15,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
+import { UsageProviderChart } from "./UsageProviderChart";
 import { UsageShareBar } from "./UsageShareBar";
 import {
   cacheHitRate,
@@ -24,27 +26,20 @@ import {
 } from "./usageBreakdown";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
-export interface UsageChartWindow {
-  readonly days: readonly string[];
-  readonly hours: readonly string[];
-  readonly resolution: "day" | "hour";
-  readonly timeZone: string;
-  readonly referenceTime: string | undefined;
-  readonly hour12: boolean;
-}
-
 export function UsageModelDialog({
   model,
   environments,
   metric,
-  chartWindow,
+  window,
+  hour12,
   onSetPrice,
   onClose,
 }: {
   readonly model: ModelTotals;
   readonly environments: readonly EnvironmentUsageStatus[];
-  readonly metric: UsageChartMetric;
-  readonly chartWindow: UsageChartWindow;
+  readonly metric: UsageMetric;
+  readonly window: UsageSummaryInput;
+  readonly hour12: boolean;
   readonly onSetPrice: () => void;
   readonly onClose: () => void;
 }) {
@@ -99,16 +94,12 @@ export function UsageModelDialog({
 
             {/* Unpriced cost is unknown, not zero, so its trend shows tokens. */}
             <UsageProviderChart
+              merged={usage}
+              window={window}
               providers={providers}
-              days={chartWindow.days}
-              daily={usage.daily}
-              hours={chartWindow.hours}
-              hourly={usage.hourly}
               metric={costUnknown ? "tokens" : metric}
-              referenceTime={chartWindow.referenceTime}
-              resolution={chartWindow.resolution}
-              timeZone={chartWindow.timeZone}
-              hour12={chartWindow.hour12}
+              hour12={hour12}
+              className="h-48"
             />
 
             <div className="grid gap-x-10 gap-y-8 sm:grid-cols-2">
@@ -148,7 +139,7 @@ export function UsageModelDialog({
   );
 }
 
-export function SpeedPremium({ premiumUsd }: { readonly premiumUsd: number }) {
+function SpeedPremium({ premiumUsd }: { readonly premiumUsd: number }) {
   return (
     <span className="text-xs text-muted-foreground">
       Premium <span className="text-foreground tabular-nums">{formatUsd(premiumUsd)}</span>

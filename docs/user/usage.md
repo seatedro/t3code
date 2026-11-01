@@ -13,7 +13,9 @@ from your connected environments. It shows token use, cache savings, model break
 cost, split by token type and by speed. These estimates are not your subscription bill.
 **Premium** is what Fast and Ultrafast requests cost above standard rates. Cost that cannot be
 split, such as a provider-reported cost for a model without public rates, shows as **Other**.
-Select a model under **Breakdown** to see its trend, cache hit rate, and cost per million tokens.
+On web and desktop, the headline compares the period with the equally long one before it; today
+is still in progress, so a short period can read low until the day ends. Hover the chart to read a
+day. Select a model under **Models** to see its trend, cache hit rate, and cost per million tokens.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
 record are missing from the totals.
@@ -49,8 +51,8 @@ explicitly.
 When your app and server support different providers, usage totals may cover only the providers
 your app understands. Update the app to include newly supported providers.
 
-On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
-environments are selected by default. The dropdown shows which environments are still scanning;
+On web and desktop, use the environment dropdown to filter costs, tokens, and limits by
+environment or provider, and to set model prices. All environments are selected by default. The dropdown shows which environments are still scanning;
 results appear as each one responds, and figures still updating are dimmed. Cursor shows its last
 saved totals first, then updates them when Cursor's API responds.
 
@@ -110,7 +112,13 @@ setting removes it from `settings.json`.
 
 ## Track subscription limits
 
-**Usage → Limits** pools every subscription account it can see per provider, so with several Codex
+On web and desktop, limits sit at the top of **Usage**, one chip per provider showing its tightest
+window. A chip turns amber at 15% left or less, and red with the time it comes back once a limit
+is spent. Select a chip for every window, its reset time, and, when you are spending faster than
+the window allows, when it runs out at this pace. **All limits** opens the pooled view described
+below. On mobile, open **Usage → Limits**.
+
+The pooled view groups every subscription account it can see per provider, so with several Codex
 or Claude accounts across your enabled environments and hubs you read one number per window rather than a
 list. Each window card shows how much of the pool is left and a bar with one segment per account,
 kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
@@ -134,14 +142,14 @@ and a partly spent session may only regain its unused portion when the week rese
 stale reset times have no refill estimate; refresh Limits for a new reading. Claude's
 model-specific weekly allowances keep their reported values.
 
-Opening Limits checks the selected connected environments automatically. Each client waits at
+Opening Usage checks the selected connected environments automatically. Each client waits at
 least five minutes between automatic checks of an environment, including after a failed check.
-If a window still looks stale, refresh Limits to re-check every provider and hub.
+If a window still looks stale, refresh to re-check every provider and hub.
 
 Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
 current model's limits without leaving the conversation. The result opens above the composer and
-closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
-anything. The command is offered only for providers that appear under **Usage → Limits**.
+closes when you dismiss it or send your next message. It uses the same snapshot as the limits on **Usage**, so it does not run the agent or refresh
+anything. The command is offered only for providers that report limits there.
 
 To keep them in view on web and desktop, turn on **Usage limits** in **Settings → Appearance → Thread details**, or right-click the thread details card.
 The bottom of the thread details card then shows how much is left in each limit window of the
@@ -176,9 +184,10 @@ using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
-The hub's Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear under **Usage → Limits**;
-accounts for other providers are not read. Codex accounts show banked reset credits; select an
-account and choose **Use reset** to redeem one. No hub plugin is required.
+The hub's Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear with the limits on
+**Usage**; accounts for other providers are not read. Codex accounts show banked reset credits;
+choose **Use reset credit** on the Codex chip, or select an account under **All limits** and choose
+**Use reset**, to redeem one. No hub plugin is required.
 
 This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
@@ -194,8 +203,8 @@ Session, Weekly, or both for each provider. Reopen T3 to refresh expired reading
 ## Keyboard shortcuts
 
 On web and desktop, open Usage from the command palette. While on Usage,
-press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
+press `T` or `C` for Tokens or Cost, or `L` for all limits, while not typing in a field.
 Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
-24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
+24 hours, 7 days, 30 days, or 90 days.
 Press `Escape` to return to the previous page. Customize these shortcuts in
 **Settings → Keybindings**.

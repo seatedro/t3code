@@ -1,8 +1,9 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
-
-import { ProviderDriverKind } from "@t3tools/contracts";
-
-import type { UsageMetric } from "./usageShortcuts";
+import { ProviderDriverKind, type UsageProviderKind } from "@t3tools/contracts";
+import {
+  USAGE_PROVIDER_COLORS,
+  USAGE_PROVIDER_ORDER,
+  type UsageMetric,
+} from "@t3tools/client-runtime/usage-ledger";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -10,61 +11,29 @@ type UsageProviderPresentation = {
   readonly driverKind: ProviderDriverKind;
 };
 
-export const PROVIDER_PRESENTATION = {
-  codex: {
-    label: "Codex",
-    color: "var(--contrast-foreground)",
-    driverKind: ProviderDriverKind.make("codex"),
-  },
-  claude: {
-    label: "Claude Code",
-    color: "#d97757",
-    driverKind: ProviderDriverKind.make("claudeAgent"),
-  },
-  grok: {
-    label: "Grok Build",
-    color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
-    driverKind: ProviderDriverKind.make("grok"),
-  },
-  cursor: { label: "Cursor", color: "#8b8b8b", driverKind: ProviderDriverKind.make("cursor") },
-  opencode: {
-    label: "OpenCode",
-    color: "#5b9bbd",
-    driverKind: ProviderDriverKind.make("opencode"),
-  },
-  antigravity: {
-    label: "Antigravity",
-    color: "#8c7bd1",
-    driverKind: ProviderDriverKind.make("antigravity"),
-  },
-  pi: {
-    label: "Pi",
-    color: "#4d9f8a",
-    driverKind: ProviderDriverKind.make("pi"),
-  },
-  muse: {
-    label: "Muse Code",
-    color: "#0866ff",
-    driverKind: ProviderDriverKind.make("muse"),
-  },
-} satisfies Record<UsageProviderKind, UsageProviderPresentation>;
+const LABELS: Record<UsageProviderKind, { readonly label: string; readonly driver: string }> = {
+  claude: { label: "Claude Code", driver: "claudeAgent" },
+  codex: { label: "Codex", driver: "codex" },
+  cursor: { label: "Cursor", driver: "cursor" },
+  grok: { label: "Grok Build", driver: "grok" },
+  opencode: { label: "OpenCode", driver: "opencode" },
+  antigravity: { label: "Antigravity", driver: "antigravity" },
+  pi: { label: "Pi", driver: "pi" },
+  muse: { label: "Muse Code", driver: "muse" },
+};
 
-export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];
+export const PROVIDER_PRESENTATION = Object.fromEntries(
+  USAGE_PROVIDER_ORDER.map((provider) => [
+    provider,
+    {
+      label: LABELS[provider].label,
+      color: USAGE_PROVIDER_COLORS[provider],
+      driverKind: ProviderDriverKind.make(LABELS[provider].driver),
+    },
+  ]),
+) as Record<UsageProviderKind, UsageProviderPresentation>;
 
-export function providersWithUsage(
-  totals: readonly {
-    readonly provider: UsageProviderKind;
-    readonly costUsd: number;
-    readonly totalTokens: number;
-  }[],
-): readonly UsageProviderKind[] {
-  const active = new Set(
-    totals
-      .filter((entry) => entry.totalTokens > 0 || entry.costUsd > 0)
-      .map((entry) => entry.provider),
-  );
-  return PROVIDER_ORDER.filter((provider) => active.has(provider));
-}
+export const PROVIDER_ORDER: readonly UsageProviderKind[] = USAGE_PROVIDER_ORDER;
 
 export function rankProvidersByMetric(
   providers: readonly UsageProviderKind[],
