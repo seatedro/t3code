@@ -139,6 +139,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
   /** Only explicit false skips Live Activity seeding; older servers may still publish. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
+  /** Takes Expo push tokens (`push.registerDevice`) and sends alerts itself, with no relay. */
+  pushDevices: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
   projectOrganization: Schema.optionalKey(Schema.Boolean),
