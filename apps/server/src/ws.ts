@@ -91,6 +91,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   MemoryError,
+  PushDeviceError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -123,6 +124,7 @@ import * as DocumentText from "./provider/DocumentText.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as Memory from "./memory/Memory.ts";
+import * as PushDevices from "./push/PushDevices.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -1275,6 +1277,11 @@ export const layerWsRpc = (
         (error: Memory.MemoryRefusal | Memory.MemoryStorageError) =>
           new MemoryError({ message: error.message, cause: error }),
       );
+      const pushDevices = yield* PushDevices.PushDevices;
+      const toPushDeviceError = Effect.mapError(
+        (error: PushDevices.PushDeviceStorageError) =>
+          new PushDeviceError({ message: error.message, cause: error }),
+      );
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2187,6 +2194,10 @@ export const layerWsRpc = (
         [WS_METHODS.memoryPrune]: (input) => memory.prune(input.ids).pipe(toMemoryError),
         [WS_METHODS.memoryForget]: (input) => memory.forget(input).pipe(toMemoryError),
         [WS_METHODS.memoryPurge]: (_input) => memory.purge.pipe(toMemoryError),
+        [WS_METHODS.pushRegisterDevice]: (input) =>
+          pushDevices.register(currentSessionId, input).pipe(toPushDeviceError),
+        [WS_METHODS.pushUnregisterDevice]: (input) =>
+          pushDevices.unregister(currentSessionId, input.token).pipe(toPushDeviceError),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) =>
           loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
@@ -3284,6 +3295,7 @@ export const layer = Layer.unwrap(
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const sql = yield* SqlClient.SqlClient;
     const memoryService = yield* Memory.Memory;
+    const pushDevicesService = yield* PushDevices.PushDevices;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3351,6 +3363,7 @@ export const layer = Layer.unwrap(
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(Layer.succeed(Memory.Memory, memoryService)),
+              Layer.provide(Layer.succeed(PushDevices.PushDevices, pushDevicesService)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
