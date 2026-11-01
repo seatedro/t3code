@@ -6636,6 +6636,81 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("stops counting a waiting link card once the user sends a newer message", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const suffix = "shell-moved-on-link";
+      const threadId = yield* addRolledBackRecoveryCandidate(suffix);
+      const runId = RunId.make(`run:${suffix}:rolled-back`);
+      const nodeId = NodeId.make(`node:${suffix}:rolled-back`);
+      const now = yield* DateTime.now;
+      const cardAt = DateTime.add(now, { seconds: 10 });
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${suffix}:link`),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        nodeId,
+        driver,
+        occurredAt: cardAt,
+        payload: {
+          id: TurnItemId.make(`link:${suffix}`),
+          threadId,
+          runId,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "waiting",
+          title: null,
+          startedAt: cardAt,
+          completedAt: null,
+          updatedAt: cardAt,
+          type: "link_request",
+          reason: "Link the build box",
+          linkStatus: "pending",
+        },
+      });
+      const pendingIds = Effect.gen(function* () {
+        const snapshot = (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        );
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        return [
+          snapshot?.pendingRuntimeRequest?.id ?? null,
+          ProjectionStore.threadShellFromProjection(projection).pendingRuntimeRequest?.id ?? null,
+        ];
+      });
+      const linkId = RuntimeRequestId.make(`link:${suffix}`);
+      assert.deepEqual(yield* pendingIds, [linkId, linkId]);
+
+      const movedOnAt = DateTime.add(now, { seconds: 20 });
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${suffix}:message`),
+        type: "message.updated",
+        threadId,
+        occurredAt: movedOnAt,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: MessageId.make(`message:${suffix}:later`),
+          threadId,
+          runId,
+          nodeId,
+          role: "user",
+          text: "Never mind, carry on",
+          attachments: [],
+          streaming: false,
+          createdAt: movedOnAt,
+          updatedAt: movedOnAt,
+        },
+      });
+      assert.deepEqual(yield* pendingIds, [null, null]);
+    }),
+  );
+
   it.effect("counts history inherited by fork shells, but not by side chats", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
