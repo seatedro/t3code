@@ -8,6 +8,7 @@ import { HttpClient } from "effect/http";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import {
   executeAuthenticatedEnvironmentHttpRequest,
@@ -96,7 +97,7 @@ export const layer: Layer.Layer<
               latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
             },
           })),
-          Effect.provideService(HttpClient.HttpClient, httpClient),
+          ConnectionTimings.measureThreadSnapshot(prepared, threadId, httpClient), // temp: connection timings
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
