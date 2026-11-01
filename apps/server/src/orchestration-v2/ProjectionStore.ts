@@ -1377,10 +1377,17 @@ function secretRequestAsPendingInput(
 
 /**
  * A secret card is answered while its agent waits in the run. A link card's
- * agent asked without waiting, so the card waits on the user after its run.
+ * agent asked without waiting, so the card waits on the user after its run,
+ * until the user sends a newer message and so moves the conversation on.
  */
-const waitsOnUser = (item: OrchestrationV2TurnItem, liveRunIds: ReadonlySet<RunId>) =>
-  item.type === "link_request" ||
+const waitsOnUser = (
+  item: OrchestrationV2TurnItem,
+  liveRunIds: ReadonlySet<RunId>,
+  latestUserMessageAt: DateTime.Utc | null,
+) =>
+  (item.type === "link_request" &&
+    (latestUserMessageAt === null ||
+      DateTime.toEpochMillis(latestUserMessageAt) <= DateTime.toEpochMillis(item.updatedAt))) ||
   (item.type === "secret_request" && item.runId !== null && liveRunIds.has(item.runId));
 
 export function threadShellFromProjection(
@@ -1410,6 +1417,13 @@ export function threadShellFromProjection(
     runs.filter(isActivityRunForShell).toSorted((left, right) => right.ordinal - left.ordinal)[0] ??
     null;
   const liveRunIds = new Set(runs.filter(isActivityRunForShell).map((run) => run.id));
+  const userMessages = projection.messages
+    .filter((message) => message.role === "user" && idleCompactionOf(message) === undefined)
+    .toSorted(
+      (left, right) =>
+        DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+    );
+  const latestUserMessage = userMessages[0] ?? null;
   let pendingRuntimeRequest = pendingRuntimeRequestSummary(
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
@@ -1422,20 +1436,17 @@ export function threadShellFromProjection(
     pendingRuntimeRequest =
       secretRequestAsPendingInput(
         projection.turnItems
-          .filter((item) => item.status === "waiting" && waitsOnUser(item, liveRunIds))
+          .filter(
+            (item) =>
+              item.status === "waiting" &&
+              waitsOnUser(item, liveRunIds, latestUserMessage?.updatedAt ?? null),
+          )
           .toSorted(
             (left, right) =>
               DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
           )[0] ?? null,
       ) ?? pendingRuntimeRequest;
   }
-  const userMessages = projection.messages
-    .filter((message) => message.role === "user" && idleCompactionOf(message) === undefined)
-    .toSorted(
-      (left, right) =>
-        DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
-    );
-  const latestUserMessage = userMessages[0] ?? null;
   const pendingBackgroundTasks = derivePendingBackgroundWork({
     latestRun,
     providerThreads: projection.providerThreads,
@@ -5709,6 +5720,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
       )`;
     };
+
+    // Mirror waitsOnUser: a link card stops waiting once the user sends a newer message.
+    const userMovedOnFrom = (alias: string) => sql`EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_messages moved_on
+      WHERE moved_on.thread_id = ${sql.literal(`${alias}.thread_id`)}
+        AND moved_on.role = 'user'
+        AND NOT ${isIdleCompactionMessage("moved_on")}
+        AND moved_on.updated_at > ${sql.literal(`${alias}.updated_at`)}
+    )`;
     // Mirrors isSilentRunForShell.
     const isSilentShellRun = (alias: string) => {
       const run = sql.literal(alias);
@@ -5851,6 +5871,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   INDEXED BY orchestration_v2_projection_turn_items_waiting_link_idx
                 WHERE link.thread_id = t.thread_id
                   AND link.type = 'link_request' AND link.status = 'waiting'
+                  AND NOT ${userMovedOnFrom("link")}
                 ORDER BY link.updated_at DESC, link.turn_item_id DESC
                 LIMIT 1
               ) AS pending_link_request_payload_json,
@@ -6153,6 +6174,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   INDEXED BY orchestration_v2_projection_turn_items_waiting_link_idx
                 WHERE link.thread_id = t.thread_id
                   AND link.type = 'link_request' AND link.status = 'waiting'
+                  AND NOT ${userMovedOnFrom("link")}
               )
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
