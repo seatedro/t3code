@@ -258,7 +258,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       <Text className="text-sm text-foreground-muted">
                         {checkedRelease.targetVersion
                           ? `Version ${checkedRelease.targetVersion} is available.`
-                          : "You are up to date."}
+                          : (checkedRelease.note ?? "You are up to date.")}
                       </Text>
                     ) : null}
                     {checkedRelease?.targetVersion &&
