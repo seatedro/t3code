@@ -3,8 +3,12 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import Migration0001 from "./ForkMigrations/001_Memory.ts";
+import Migration0002 from "./ForkMigrations/002_PushDevices.ts";
 
-const migrationEntries = [[1, "Memory", Migration0001]] as const;
+const migrationEntries = [
+  [1, "Memory", Migration0001],
+  [2, "PushDevices", Migration0002],
+] as const;
 
 const run = Migrator.make({});
 

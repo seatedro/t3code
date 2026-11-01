@@ -76,6 +76,12 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets a session take thread alerts by push only if it can already read threads", () => {
+    for (const method of [WS_METHODS.pushRegisterDevice, WS_METHODS.pushUnregisterDevice]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

@@ -126,7 +126,7 @@ it.effect("fork migrations keep their own history apart from upstream's", () =>
       SELECT name FROM effect_sql_migrations WHERE name = 'Memory'
     `;
 
-    expect(fork.map((row) => row.name)).toEqual(["Memory"]);
+    expect(fork.map((row) => row.name)).toEqual(["Memory", "PushDevices"]);
     expect(upstream).toEqual([]);
   }).pipe(Effect.provide(memoryLayer)),
 );
