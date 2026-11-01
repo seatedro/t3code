@@ -60,14 +60,15 @@ export interface ThreadSearchResultsState {
 }
 
 /**
- * How a search reaches environments whose shells omit older settled threads (others ignore it):
- * the caller's project scope and its names for environments, which its own ranking matches, and
- * whether to skip message search.
+ * How a search reaches threads that shells omit: older settled ones on environments that leave
+ * them out, and archived ones with `includeArchived`. It carries the caller's project scope and its
+ * names for environments, which its own ranking matches, and whether to skip message search.
  */
 export const ThreadSearchScope = Schema.Struct({
   projectIds: Schema.optionalKey(Schema.Array(ProjectId)),
   environmentLabels: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   titlesOnly: Schema.optionalKey(Schema.Boolean),
+  includeArchived: Schema.optionalKey(Schema.Boolean),
 });
 export type ThreadSearchScope = typeof ThreadSearchScope.Type;
 
@@ -105,9 +106,10 @@ export function threadSearchMatchKey(
 }
 
 /**
- * Message matches from every environment, plus, from environments whose shells omit older settled
- * threads (`olderSettledBefore` is set), the rows of the best older matches. Callers mount those
- * rows (`rows`) so their own ranking sees them, as it sees shell rows.
+ * Message matches from every environment, plus the rows of the best matches shells omit: older
+ * settled threads from environments that leave them out (`olderSettledBefore` is set), and archived
+ * threads when the scope includes them. Callers mount those rows (`rows`) so their own ranking sees
+ * them, as it sees shell rows.
  */
 export function createThreadSearchResultsAtomFamily<E>(options: {
   readonly getSearchAtom: (
@@ -132,23 +134,26 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
       const rows: Array<ThreadSearchResultsState["rows"][number]> = [];
       let isLoading = false;
 
+      const includeArchived = scope.includeArchived === true;
       for (const environmentId of environmentIds) {
         const before = options.olderSettledBefore
           ? get(options.olderSettledBefore(environmentId))
           : null;
-        if (!searchMessages && before === null) continue;
+        const wantsRows = before !== null || includeArchived;
+        if (!searchMessages && !wantsRows) continue;
         const label = scope.environmentLabels?.[environmentId];
         const result = get(
           options.getSearchAtom(environmentId, {
             query,
-            ...(before === null
-              ? {}
-              : {
-                  olderSettledBefore: before,
+            ...(before === null ? {} : { olderSettledBefore: before }),
+            ...(includeArchived ? { includeArchived } : {}),
+            ...(wantsRows
+              ? {
                   ...(scope.projectIds === undefined ? {} : { projectIds: scope.projectIds }),
                   ...(label === undefined ? {} : { environmentLabel: label }),
                   ...(searchMessages ? {} : { titlesOnly: true }),
-                }),
+                }
+              : {}),
           }),
         );
         isLoading ||= result.waiting;
