@@ -260,6 +260,43 @@ describe("ssh tunnel scripts", () => {
     }),
   );
 
+  it.effect("checks a new and a reused tunnel through the small descriptor, not the web app", () =>
+    Effect.gen(function* () {
+      const requested: Array<string> = [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        const args = commandArgs(command);
+        if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
+        if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+        return Effect.succeed(makeSuccessfulProcess('{"remotePort":3773}\n'));
+      });
+      const recordingHttpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          requested.push(new URL(request.url).pathname);
+          return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+        }),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, recordingHttpClient),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+      );
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(target);
+        yield* manager.ensureEnvironment(target);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+
+      assert.deepStrictEqual(requested, [
+        "/.well-known/t3/environment",
+        "/.well-known/t3/environment",
+      ]);
+    }),
+  );
+
   it.effect.each(["local tunnel", "remote server"] as const)(
     "waits for %s shutdown before reconnecting the same target",
     (stalledStep) =>

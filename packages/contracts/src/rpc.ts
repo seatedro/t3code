@@ -1858,6 +1858,10 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     usageLimitsCommand: Schema.optional(Schema.Boolean),
     /** Omit per-cwd provider snapshots; the client fetches its cwd through `server.refreshProviders`. */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** For clients without keyboard shortcuts: empty keybindings and no keybinding updates. */
+    withoutKeybindings: Schema.optional(Schema.Boolean),
+    /** For clients without a command menu: providers without slash commands or skills. */
+    withoutProviderCommands: Schema.optional(Schema.Boolean),
   }),
   success: ServerConfigStreamEvent,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),

@@ -63,6 +63,10 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  /** The client has no keyboard shortcuts, so its config skips them. */
+  readonly withoutKeybindings?: boolean;
+  /** The client has no slash command menu, so its config skips provider commands and skills. */
+  readonly withoutProviderCommands?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -168,14 +172,21 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
 ) {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
+  // What this client never reads applies to every config subscription it opens.
+  const clientShape = {
+    ...(options.withoutKeybindings === true ? { withoutKeybindings: true } : {}),
+    ...(options.withoutProviderCommands === true ? { withoutProviderCommands: true } : {}),
+  };
   const serverConfigInput: ServerConfigSubscriptionInput = {
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...clientShape,
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
     ...input,
+    ...clientShape,
     workspaceSnapshotsOnDemand: true,
   });
 
@@ -400,7 +411,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Stream.unwrap(
         validatedInitialConfig.pipe(
           Effect.as(
-            Equal.equals(input, serverConfigInput)
+            Equal.equals({ ...input, ...clientShape }, serverConfigInput)
               ? serverConfigEvents
               : protocolClient[WS_METHODS.subscribeServerConfig](onDemandSnapshots(input)),
           ),

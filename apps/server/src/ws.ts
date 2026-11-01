@@ -372,6 +372,10 @@ function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): Se
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
 }
 
+function withoutProviderCommands(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
+  return providers.map((provider) => ({ ...provider, slashCommands: [], skills: [] }));
+}
+
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
@@ -3112,23 +3116,37 @@ export const layerWsRpc = (
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
               const workspaceSnapshotsOnDemand = input.workspaceSnapshotsOnDemand === true;
+              // A client that never reads these skips most of the snapshot's bytes, which
+              // matters most to sockets without permessage-deflate (React Native's).
+              const clientProviders =
+                input.withoutProviderCommands === true
+                  ? withoutProviderCommands
+                  : (providers: ReadonlyArray<ServerProvider>) => providers;
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
-              const config = yield* loadServerConfig({
+              const loaded = yield* loadServerConfig({
                 usageLimitsCommand,
                 workspaceSnapshotsOnDemand,
               });
-              const keybindingsUpdates = keybindingsChanges.pipe(
-                Stream.map((event) => ({
-                  version: 1 as const,
-                  type: "keybindingsUpdated" as const,
-                  payload: {
-                    keybindings: event.keybindings,
-                    issues: event.issues,
-                  },
-                })),
-              );
+              const config = {
+                ...loaded,
+                providers: clientProviders(loaded.providers),
+                ...(input.withoutKeybindings === true ? { keybindings: [] } : {}),
+              };
+              const keybindingsUpdates =
+                input.withoutKeybindings === true
+                  ? Stream.empty
+                  : keybindingsChanges.pipe(
+                      Stream.map((event) => ({
+                        version: 1 as const,
+                        type: "keybindingsUpdated" as const,
+                        payload: {
+                          keybindings: event.keybindings,
+                          issues: event.issues,
+                        },
+                      })),
+                    );
               const providerStatuses = Stream.zipLatestWith(
                 // Seed the changes-only stream so early source refreshes pair with current providers.
                 Stream.concat(
@@ -3145,9 +3163,11 @@ export const layerWsRpc = (
                     ? withUsageLimitsCommands(providers, sources)
                     : providers;
                   // Stripped before the de-dupe below, so snapshot-only changes send nothing.
-                  return workspaceSnapshotsOnDemand
-                    ? withoutWorkspaceSnapshots(commandProviders)
-                    : commandProviders;
+                  return clientProviders(
+                    workspaceSnapshotsOnDemand
+                      ? withoutWorkspaceSnapshots(commandProviders)
+                      : commandProviders,
+                  );
                 },
               ).pipe(
                 // Compare initial paired values with the snapshot; blindly dropping them loses changes between snapshot and subscription.

@@ -36,7 +36,11 @@ type ConnectionLayerSource =
 
 const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
-    Connection.layerWithOptions({ usageLimitSources: true, usageLimitsCommand: true }),
+    Connection.layerWithOptions({
+      usageLimitSources: true,
+      usageLimitsCommand: true,
+      withoutKeybindings: true,
+    }),
   ),
   Layer.provideMerge(
     Layer.mergeAll(
