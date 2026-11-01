@@ -24,6 +24,7 @@ import {
 } from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import * as ConnectionTimings from "./timings.ts"; // temp: connection timings
 
 export type ConnectionDriverProgress =
   | {
@@ -188,16 +189,20 @@ export const make = Effect.gen(function* () {
     return yield* connectOverRoutes(
       entry,
       (route) => checkRoute(entry, route),
-      Effect.fnUntraced(function* (route) {
-        const prepared = yield* resolver.prepare(routeEntry(entry, route));
-        yield* reportProgress({ stage: "opening", prepared });
-        const session = yield* sessions.connect(prepared);
-        yield* reportProgress({ stage: "synchronizing", prepared });
-        yield* session.ready;
-        return { prepared, session } satisfies EnvironmentConnectionLease;
-      }),
+      Effect.fnUntraced(
+        function* (route) {
+          const prepared = yield* resolver.prepare(routeEntry(entry, route));
+          yield* ConnectionTimings.markPrepared; // temp: connection timings
+          yield* reportProgress({ stage: "opening", prepared });
+          const session = yield* sessions.connect(prepared);
+          yield* reportProgress({ stage: "synchronizing", prepared });
+          yield* session.ready;
+          return { prepared, session } satisfies EnvironmentConnectionLease;
+        },
+        ConnectionTimings.measureAttempt, // temp: connection timings
+      ),
     );
-  });
+  }, ConnectionTimings.measureConnect); // temp: connection timings
 
   const preflight = (entry: ConnectionCatalogEntry, route: ConnectionRoute) =>
     (sendsTokenInClear(connectionRoutes(entry), route)
