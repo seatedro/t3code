@@ -299,7 +299,11 @@ it.live.each(["thread", "shell"] as const)(
         stream: Stream.Stream<A, E, R>,
       ) =>
         stream.pipe(
-          Stream.tap((item) =>
+          // Stream chunks are RPC chunks; each one waits for the client's ACK.
+          Stream.chunks,
+          Stream.map((chunk, index) => chunk.map((item) => ({ item, chunk: index }))),
+          Stream.flattenIterable,
+          Stream.tap(({ item }) =>
             Effect.gen(function* () {
               if (item.kind !== "synchronized") return;
               const [live] = yield* insert(4);
@@ -313,8 +317,12 @@ it.live.each(["thread", "shell"] as const)(
               yield* store.publishCommitted(events);
             }),
           ),
-          Stream.takeUntil((item) => item.sequence === liveSequence),
-          Stream.map((item) => ({ kind: item.kind as string, sequence: item.sequence })),
+          Stream.takeUntil(({ item }) => item.sequence === liveSequence),
+          Stream.map(({ item, chunk }) => ({
+            kind: item.kind as string,
+            sequence: item.sequence,
+            chunk,
+          })),
           Stream.runCollect,
         );
       const subscription = Effect.gen(function* () {
@@ -367,6 +375,9 @@ it.live.each(["thread", "shell"] as const)(
         items.flatMap((item) => (item.sequence === undefined ? [] : [item.sequence])),
         [after!.sequence, liveSequence],
       );
+      const [replayed, synchronized, live] = items;
+      assert.equal(synchronized!.chunk, replayed!.chunk);
+      assert.isAbove(live!.chunk, synchronized!.chunk);
     }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
@@ -693,13 +704,14 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
       ...Array.from({ length: 25 }, (_, index) => shell(`recent-${index}`, null, null, 1)),
       shell("old", null, null, 30),
     ];
-    const firstSnapshot = (input: {
+    const firstChunk = (input: {
       readonly omitIdleSubagents?: boolean;
       readonly omitOlderSettled?: boolean;
+      readonly requestCompletionMarker?: boolean;
     }) =>
       subscribeOrchestrationV2Shell(input).pipe(
-        Effect.flatMap((stream) => stream.pipe(Stream.take(1), Stream.runCollect)),
-        Effect.map(([item]) => (item?.kind === "snapshot" ? item.snapshot : null)),
+        Effect.flatMap((stream) => stream.pipe(Stream.chunks, Stream.take(1), Stream.runCollect)),
+        Effect.map(([chunk]) => chunk ?? []),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           listActiveShellIndex: () =>
             Effect.succeed(
@@ -740,8 +752,16 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
           ),
         ),
       );
+    const firstSnapshot = (input: Parameters<typeof firstChunk>[0]) =>
+      firstChunk(input).pipe(
+        Effect.map(([item]) => (item?.kind === "snapshot" ? item.snapshot : null)),
+      );
 
     const recent = threads.slice(3, 28).map((thread) => thread.id);
+    assert.deepEqual(
+      (yield* firstChunk({ requestCompletionMarker: true })).map((item) => item.kind),
+      ["snapshot", "synchronized"],
+    );
     const full = yield* firstSnapshot({});
     assert.deepEqual(
       full?.threads.map((thread) => thread.id),
