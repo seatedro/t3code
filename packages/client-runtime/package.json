@@ -351,6 +351,10 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/thread-catch-up": {
+      "types": "./src/state/threadCatchUp.ts",
+      "default": "./src/state/threadCatchUp.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

@@ -11,6 +11,8 @@ import {
 import { boundedSnapshotProjection } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import { pendingBackgroundTurnItems } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -22,7 +24,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
@@ -1173,6 +1175,26 @@ function threadStateChanges(
   );
 }
 
+export type ThreadCatchUpOutcome =
+  /** Mounted elsewhere: its own subscription keeps it and its saved copy current. */
+  "open" | "absent" | "current" | "too-old" | "caught-up" | "timed-out";
+
+export interface ThreadCatchUpInput {
+  readonly registry: AtomRegistry.AtomRegistry;
+  readonly environmentId: EnvironmentIdType;
+  readonly threadId: ThreadIdType;
+  /** The shell's `updatedAt` in epoch ms. Without it, any saved copy is resumed. */
+  readonly shellUpdatedAt?: number;
+  readonly maxBehindMs: number;
+  readonly timeout: Duration.Input;
+}
+
+function isThreadCatchUpSettled<E>(result: AsyncResult.AsyncResult<EnvironmentThreadState, E>) {
+  if (!AsyncResult.isSuccess(result)) return AsyncResult.isFailure(result);
+  const { status, error } = result.value;
+  return status === "live" || status === "deleted" || Option.isSome(error);
+}
+
 export function createEnvironmentThreadStateAtoms<R, E>(
   runtime: Atom.AtomRuntime<
     | EnvironmentRegistry.EnvironmentRegistry
@@ -1213,9 +1235,76 @@ export function createEnvironmentThreadStateAtoms<R, E>(
       .pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-state:${key}`));
   });
 
+  /**
+   * Brings a closed thread's saved copy (in memory or on disk) up to date: resumes from the
+   * copy's sequence through the same subscription an open thread uses, saves, then lets go.
+   * Read-only, and it never fetches a thread this client has no copy of.
+   */
+  const catchUp = Effect.fn("EnvironmentThreadState.catchUp")(function* (
+    input: ThreadCatchUpInput,
+  ) {
+    const { registry, environmentId, threadId } = input;
+    const key = threadKey({ environmentId, threadId });
+    const atom = family(key);
+    const node = registry.getNodes().get(atom);
+    if (node !== undefined && (node.listeners.size > 0 || node.children.size > 0)) {
+      return "open" satisfies ThreadCatchUpOutcome;
+    }
+    const resumeAtom = resumeFamily(key);
+    const retainedNode = registry.getNodes().get(resumeAtom);
+    let seed = (retainedNode?.value() as ThreadResumeCache | undefined)?.snapshot;
+    if (seed === undefined) {
+      const cache = yield* Persistence.EnvironmentCacheStore;
+      const saved = yield* cache
+        .loadThread(environmentId, threadId)
+        .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationV2ThreadDetailSnapshot>()));
+      if (Option.isNone(saved)) return "absent" satisfies ThreadCatchUpOutcome;
+      const { snapshotSequence, projection } = saved.value;
+      seed = {
+        state: {
+          data: Option.some(projection),
+          status: "cached",
+          error: Option.none(),
+          history: historyMetaFromCachedSnapshot(saved.value),
+          sequence: snapshotSequence,
+        },
+        sequence: snapshotSequence,
+        persisted: true,
+      };
+    }
+    const copy = Option.getOrUndefined(seed.state.data);
+    if (copy === undefined || seed.state.status === "deleted") {
+      return "absent" satisfies ThreadCatchUpOutcome;
+    }
+    if (input.shellUpdatedAt !== undefined) {
+      // The shell's `updatedAt` follows every event, like the projection's; this client only
+      // moves `thread.updatedAt` on thread-record events.
+      const copyUpdatedAt = Math.max(
+        DateTime.toEpochMillis(copy.updatedAt),
+        DateTime.toEpochMillis(copy.thread.updatedAt),
+      );
+      if (copyUpdatedAt >= input.shellUpdatedAt) return "current" satisfies ThreadCatchUpOutcome;
+      if (input.shellUpdatedAt - copyUpdatedAt > input.maxBehindMs) {
+        return "too-old" satisfies ThreadCatchUpOutcome;
+      }
+    }
+    // Handing the loaded copy to the thread spares a second decode. A copy kept from a live
+    // view would stay "live" through the resume, so mark it cached to wait for the marker.
+    registry.get(resumeAtom).snapshot = { ...seed, state: { ...seed.state, status: "cached" } };
+    const settled = yield* AtomRegistry.toStream(registry, atom).pipe(
+      Stream.filter(isThreadCatchUpSettled),
+      Stream.runHead,
+      Effect.timeoutOption(input.timeout),
+    );
+    return Option.isSome(settled)
+      ? ("caught-up" satisfies ThreadCatchUpOutcome)
+      : ("timed-out" satisfies ThreadCatchUpOutcome);
+  });
+
   return {
     stateAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
       family(threadKey({ environmentId, threadId })),
+    catchUp,
   };
 }
 

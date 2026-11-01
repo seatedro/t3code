@@ -9,6 +9,7 @@ import {
   type OrchestrationV2ThreadStreamItem,
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -54,6 +55,8 @@ const SNAPSHOT: OrchestrationV2ThreadDetailSnapshot = { snapshotSequence: 7, pro
 const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?: {
   readonly snapshot?: OrchestrationV2ThreadDetailSnapshot;
   readonly socketSnapshot?: false;
+  /** The thread's saved copy on disk. */
+  readonly saved?: OrchestrationV2ThreadDetailSnapshot;
 }) {
   const subscriptions = yield* Queue.unbounded<{
     readonly afterSequence: number | undefined;
@@ -66,6 +69,7 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
     readonly closed: Deferred.Deferred<void>;
   }>();
   const snapshot = options?.snapshot ?? SNAPSHOT;
+  const saves = yield* Queue.unbounded<OrchestrationV2ThreadDetailSnapshot>();
   let httpLoads = 0;
   let diskLoads = 0;
   let opened = 0;
@@ -163,32 +167,30 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
       return HttpClientResponse.fromWeb(request, Response.json(page));
     }).pipe(Effect.scoped),
   );
+  const cache = Persistence.EnvironmentCacheStore.of({
+    loadShell: () => Effect.succeedNone,
+    saveShell: () => Effect.void,
+    loadThread: () =>
+      Effect.sync(() => {
+        diskLoads += 1;
+        return Option.fromUndefinedOr(options?.saved);
+      }),
+    saveThread: (_environmentId, saved) => Queue.offer(saves, saved),
+    removeThread: () => Effect.void,
+    loadServerConfig: () => Effect.succeedNone,
+    saveServerConfig: () => Effect.void,
+    loadVcsRefs: () => Effect.succeedNone,
+    saveVcsRefs: () => Effect.void,
+    removeVcsRefs: () => Effect.void,
+    clearVcsRefs: () => Effect.void,
+    clear: () => Effect.void,
+  });
   const runtime = Atom.runtime(
     Layer.mergeAll(
       Layer.succeed(ThreadHistoryController.ThreadHistoryController, historyController),
       Layer.succeed(HttpClient.HttpClient, historyHttpClient),
       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
-      Layer.succeed(
-        Persistence.EnvironmentCacheStore,
-        Persistence.EnvironmentCacheStore.of({
-          loadShell: () => Effect.succeedNone,
-          saveShell: () => Effect.void,
-          loadThread: () =>
-            Effect.sync(() => {
-              diskLoads += 1;
-              return Option.none();
-            }),
-          saveThread: () => Effect.void,
-          removeThread: () => Effect.void,
-          loadServerConfig: () => Effect.succeedNone,
-          saveServerConfig: () => Effect.void,
-          loadVcsRefs: () => Effect.succeedNone,
-          saveVcsRefs: () => Effect.void,
-          removeVcsRefs: () => Effect.void,
-          clearVcsRefs: () => Effect.void,
-          clear: () => Effect.void,
-        }),
-      ),
+      Layer.succeed(Persistence.EnvironmentCacheStore, cache),
       Layer.succeed(
         ThreadSnapshotLoader.ThreadSnapshotLoader,
         ThreadSnapshotLoader.ThreadSnapshotLoader.of({
@@ -232,6 +234,8 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
     ref,
     subscriptions,
     olderLoads,
+    saves,
+    cache,
     loadEarlier: () => historyController.loadEarlier(TARGET.environmentId, THREAD_ID),
     counts: () => ({ httpLoads, diskLoads, opened, active }),
   };
@@ -449,3 +453,114 @@ it.effect("keeps snapshot boundaries and completion markers ordered inside a rep
     yield* Deferred.await(next.closed);
   }),
 );
+
+describe("catchUp", () => {
+  const minutes = (count: number) => DateTime.add(THREAD.thread.updatedAt, { minutes: count });
+  const titleEvent = (
+    sequence: number,
+    title: string,
+    occurredAt: DateTime.Utc,
+  ): OrchestrationV2ThreadStreamItem => ({
+    kind: "event",
+    sequence,
+    event: {
+      id: EventId.make(`catch-up-title-${sequence}`),
+      type: "thread.metadata-updated",
+      threadId: THREAD_ID,
+      occurredAt,
+      payload: { ...THREAD.thread, title },
+    },
+  });
+  const catchUp = (
+    h: Effect.Success<ReturnType<typeof makeHarness>>,
+    shellUpdatedAt: DateTime.Utc,
+    maxBehindMs = 60 * 60_000,
+  ) =>
+    h.rawAtoms
+      .catchUp({
+        registry: h.registry,
+        environmentId: TARGET.environmentId,
+        threadId: THREAD_ID,
+        shellUpdatedAt: DateTime.toEpochMillis(shellUpdatedAt),
+        maxBehindMs,
+        timeout: "20 seconds",
+      })
+      .pipe(Effect.provideService(Persistence.EnvironmentCacheStore, h.cache));
+
+  it.effect("resumes a saved copy from its sequence, saves the result, and lets go", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ saved: SNAPSHOT });
+      const running = yield* catchUp(h, minutes(5)).pipe(Effect.forkScoped);
+      const subscription = yield* Queue.take(h.subscriptions);
+      expect(subscription.afterSequence).toBe(SNAPSHOT.snapshotSequence);
+      yield* Queue.offerAll(subscription.events, [
+        titleEvent(9, "Caught up", minutes(5)),
+        { kind: "synchronized" },
+      ]);
+      expect(yield* Fiber.join(running)).toBe("caught-up");
+      const saved = yield* Queue.take(h.saves);
+      expect(saved.snapshotSequence).toBe(9);
+      expect(saved.projection.thread.title).toBe("Caught up");
+      yield* Deferred.await(subscription.closed);
+      // The disk copy is decoded once: the thread starts from the copy catch-up loaded.
+      expect(h.counts()).toEqual({ httpLoads: 0, diskLoads: 1, opened: 1, active: 0 });
+    }),
+  );
+
+  it.effect("leaves no copy, a copy as new as the shell, and a copy too far behind alone", () =>
+    Effect.gen(function* () {
+      const none = yield* makeHarness();
+      expect(yield* catchUp(none, minutes(5))).toBe("absent");
+      expect(none.counts()).toMatchObject({ httpLoads: 0, opened: 0 });
+
+      // Events after the last thread-record event move only the projection's clock.
+      const saved = yield* makeHarness({
+        saved: { ...SNAPSHOT, projection: { ...THREAD, updatedAt: minutes(2) } },
+      });
+      expect(yield* catchUp(saved, minutes(2))).toBe("current");
+      expect(yield* catchUp(saved, minutes(63))).toBe("too-old");
+      expect(saved.counts()).toMatchObject({ httpLoads: 0, opened: 0 });
+    }),
+  );
+
+  it.effect("leaves an open thread to its own subscription", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ saved: SNAPSHOT });
+      const unmount = h.registry.mount(h.stateAtom);
+      const open = yield* Queue.take(h.subscriptions);
+      expect(yield* catchUp(h, minutes(5))).toBe("open");
+      expect(h.counts().opened).toBe(1);
+      unmount();
+      yield* Deferred.await(open.closed);
+    }),
+  );
+
+  it.effect("resumes a copy kept from a live view and waits for the server to confirm", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ saved: SNAPSHOT });
+      const unmount = h.registry.mount(h.stateAtom);
+      const viewed = yield* Queue.take(h.subscriptions);
+      yield* Queue.offerAll(viewed.events, [
+        titleEvent(8, "Viewed", minutes(1)),
+        { kind: "synchronized" },
+      ]);
+      yield* observeState(h.registry, h.stateAtom, (state) => state.status === "live");
+      unmount();
+      yield* Deferred.await(viewed.closed);
+
+      const running = yield* catchUp(h, minutes(5)).pipe(Effect.forkScoped);
+      const resumed = yield* Queue.take(h.subscriptions);
+      expect(resumed.afterSequence).toBe(8);
+      // A kept live status would let go before the replay; it must wait for the marker.
+      yield* observeState(h.registry, h.stateAtom, (state) => state.status === "synchronizing");
+      yield* Queue.offerAll(resumed.events, [
+        titleEvent(9, "Caught up", minutes(5)),
+        { kind: "synchronized" },
+      ]);
+      expect(yield* Fiber.join(running)).toBe("caught-up");
+      expect((yield* Queue.take(h.saves)).projection.thread.title).toBe("Viewed");
+      expect((yield* Queue.take(h.saves)).projection.thread.title).toBe("Caught up");
+      expect(h.counts()).toMatchObject({ diskLoads: 1, opened: 2 });
+    }),
+  );
+});
