@@ -9,10 +9,12 @@ import {
   UsageProviderKind,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { limitSeverity } from "@t3tools/client-runtime/usage-ledger";
 import {
   formatDuration,
   formatResetsIn,
   type LimitPace,
+  type LimitPresentations,
   paceOf,
   paceRemainingPercent,
   remainingPercent,
@@ -22,6 +24,7 @@ import { Fragment, type ReactNode, useLayoutEffect, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { observeResize } from "../../lib/observeResize";
+import { cn } from "../../lib/utils";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
@@ -46,13 +49,6 @@ const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof Ga
   on: { label: "On pace with the window", icon: GaugeIcon },
   under: { label: "Under pace: headroom left for the rest of the window", icon: TrendingDownIcon },
 };
-
-export function barColor(driver: ServerProvider["driver"]): string {
-  const presentation = Object.values(PROVIDER_PRESENTATION).find(
-    (entry) => entry.driverKind === driver,
-  );
-  return presentation?.color ?? "var(--foreground)";
-}
 
 export function PaceIcon({ pace }: { readonly pace: LimitPace }) {
   const Icon = PACE[pace].icon;
@@ -113,16 +109,15 @@ export function usePaceMark(timeLeft: number | null) {
 }
 
 function WindowBar({
-  color,
   window,
   now,
 }: {
-  readonly color: string;
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const remaining = remainingPercent(window);
+  const severity = limitSeverity(remaining);
   const timeLeft = paceRemainingPercent(window, now);
   const [barRef, paceMark] = usePaceMark(timeLeft);
   const resetsIn = formatResetsIn(window, now);
@@ -148,11 +143,20 @@ function WindowBar({
       >
         {/* Clip both layers so the gap exposes even a translucent composer surface. */}
         <div className="absolute inset-0" style={paceMark?.gap}>
-          <div className="absolute inset-x-0 inset-y-1.5 rounded-full bg-muted" />
+          {/* Bars stay neutral; amber and red are reserved for a low or spent window. */}
+          <div
+            className={cn(
+              "absolute inset-x-0 inset-y-1.5 rounded-full",
+              severity === "out" ? "bg-error/12 ring-1 ring-error/35 ring-inset" : "bg-muted",
+            )}
+          />
           {remaining > 0 ? (
             <div
-              className="absolute inset-y-1.5 left-0 rounded-full"
-              style={{ width: `${remaining}%`, backgroundColor: color }}
+              className={cn(
+                "absolute inset-y-1.5 left-0 rounded-full",
+                severity === "low" ? "bg-warning" : "bg-foreground/85",
+              )}
+              style={{ width: `${remaining}%` }}
             />
           ) : null}
         </div>
@@ -185,17 +189,14 @@ function WindowBar({
 }
 
 export function LimitWindows({
-  driver,
   windows,
   now,
   compact = false,
 }: {
-  readonly driver: ServerProvider["driver"];
   readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
   readonly now: number;
   readonly compact?: boolean;
 }) {
-  const color = barColor(driver);
   return (
     <div
       className={
@@ -215,7 +216,7 @@ export function LimitWindows({
                 {remainingPercent(window)}% left
               </span>
             </span>
-            <WindowBar color={color} window={window} now={now} />
+            <WindowBar window={window} now={now} />
             <span className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
               {pace ? <PaceIcon pace={pace} /> : null}
               <span className="ms-auto shrink-0">{resetsIn ?? ""}</span>
@@ -357,24 +358,17 @@ export function ResetCredits({
   );
 }
 
-/** Advance now only on explicit refresh to avoid page repaints from ticking. */
-export function UsageLimitsSection({
-  selectedEnvironmentIds,
-  hiddenProviders,
-  now,
-  cursorPrompt,
-}: {
-  readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
-  readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
-  readonly now: number;
-  readonly cursorPrompt?: ReactNode;
-}) {
-  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+/** The selected environments' limit reports, without hidden providers' accounts. */
+export function selectLimitPresentations(
+  presentations: LimitPresentations,
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null,
+  hiddenProviders: ReadonlySet<UsageProviderKind>,
+): LimitPresentations {
   const hiddenDrivers = new Set<ServerProvider["driver"]>(
     [...hiddenProviders].map((provider) => PROVIDER_PRESENTATION[provider].driverKind),
   );
   const isVisible = (driver: ServerProvider["driver"]) => !hiddenDrivers.has(driver);
-  const selected = new Map(
+  return new Map(
     [...presentations].flatMap(([id, presentation]) => {
       if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(id)) return [];
       const config = presentation.serverConfig;
@@ -399,5 +393,30 @@ export function UsageLimitsSection({
       ];
     }),
   );
-  return <UsageLimitsPooled presentations={selected} now={now} cursorPrompt={cursorPrompt} />;
+}
+
+/** Advance now only on explicit refresh to avoid page repaints from ticking. */
+export function UsageLimitsSection({
+  selectedEnvironmentIds,
+  hiddenProviders,
+  now,
+  cursorPrompt,
+}: {
+  readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+  readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
+  readonly now: number;
+  readonly cursorPrompt?: ReactNode;
+}) {
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+  return (
+    <UsageLimitsPooled
+      presentations={selectLimitPresentations(
+        presentations,
+        selectedEnvironmentIds,
+        hiddenProviders,
+      )}
+      now={now}
+      cursorPrompt={cursorPrompt}
+    />
+  );
 }
