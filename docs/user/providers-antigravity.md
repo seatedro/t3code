@@ -138,7 +138,7 @@ is refused while the runtime is in use.
 
 ## Check access and troubleshoot
 
-Open **Usage > Limits** to see the remaining Gemini and shared Claude/GPT allowances
+Open **Usage** and select the Antigravity limit (**Usage > Limits** on mobile) to see the remaining Gemini and shared Claude/GPT allowances
 for Google sign-ins. Each group has separate five-hour and weekly limits and reset
 times. Limits refresh with provider status and include usage outside T3 Code.
 

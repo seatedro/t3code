@@ -28,6 +28,8 @@ import {
   useState,
 } from "react";
 
+import { limitSeverity } from "@t3tools/client-runtime/usage-ledger";
+
 import { ensureLocalApi } from "../../localApi";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -42,7 +44,6 @@ import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../u
 import {
   PaceIcon,
   ResetCreditDialog,
-  barColor,
   usePaceMark,
   resetCreditsSummary,
   useResetCredit,
@@ -344,6 +345,7 @@ function SegmentTriggers({
   const popover = use(SegmentPopoverContext) ?? undefined;
   const payload: SegmentPayload = { account, window, reset, redeem };
   const remaining = remainingPercent(window);
+  const severity = limitSeverity(remaining);
   const timeLeft = paceRemainingPercent(window, now);
   const [segmentRef, paceMark] = usePaceMark(timeLeft);
   const resetsIn = formatResetsIn(window, now);
@@ -360,7 +362,10 @@ function SegmentTriggers({
             type="button"
             style={{ gridColumn: index, gridRow: 1, ...paceMark?.gappedTrack }}
             aria-label={`${account.displayName ?? (account.email ? accountInitials(account.email) : account.driver)}: ${remaining}% left${resetsIn ? `, ${resetsIn}` : ""}${timeLeft === null ? "" : `, ${timeLeft}% of the window left`}${credits ? `, ${credits} reset ${credits === 1 ? "credit" : "credits"} banked` : ""}`}
-            className="relative h-5 min-w-0 cursor-pointer rounded-md bg-muted text-start outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[popup-open]:ring-1 data-[popup-open]:ring-inset data-[popup-open]:ring-border @2xl/pool:h-8"
+            className={cn(
+              "relative h-5 min-w-0 cursor-pointer rounded-md bg-muted text-start outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[popup-open]:ring-1 data-[popup-open]:ring-inset data-[popup-open]:ring-border @2xl/pool:h-8",
+              severity === "out" && "bg-error/10 ring-1 ring-error/35 ring-inset",
+            )}
           />
         }
       >
@@ -369,8 +374,14 @@ function SegmentTriggers({
           <div className="absolute inset-0" style={paceMark?.gap}>
             <div
               aria-hidden
-              className="absolute inset-y-0 left-0 rounded-md opacity-35"
-              style={{ width: `${remaining}%`, backgroundColor: color }}
+              className={cn(
+                "absolute inset-y-0 left-0 rounded-md",
+                severity === "low" ? "bg-warning opacity-60" : "opacity-35",
+              )}
+              style={{
+                width: `${remaining}%`,
+                ...(severity === "low" ? {} : { backgroundColor: color }),
+              }}
             />
             {remaining < 100 && reset && refillPercent > 0 ? (
               <div
@@ -570,7 +581,8 @@ function PoolWindowCard({
 }
 
 function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
-  const color = barColor(pool.driver);
+  // Bars stay neutral so state colors mean something; identity comes from the provider mark.
+  const color = "var(--foreground)";
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
   return (

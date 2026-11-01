@@ -25,6 +25,7 @@ const model = (
   unpricedTokens: 0,
   costShare: 0,
   tokenShare: 0,
+  byPeriod: new Map(),
   ...overrides,
 });
 
