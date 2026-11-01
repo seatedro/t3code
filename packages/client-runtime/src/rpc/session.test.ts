@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
+import { deflatingJson } from "@t3tools/shared/rpcFrameDeflate";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -89,7 +90,7 @@ class TestWebSocket {
     this.emit("open", { type: "open" });
   }
 
-  serverMessage(data: string) {
+  serverMessage(data: string | Uint8Array) {
     this.emit("message", { data, type: "message" });
   }
 
@@ -282,7 +283,7 @@ describe("RpcSessionFactory", () => {
       const readyFiber = yield* Effect.forkChild(session.ready);
       const socket = yield* awaitSocket(sockets);
 
-      expect(socket.url).toBe(PREPARED.socketUrl);
+      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameCompression=deflate`);
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
@@ -333,6 +334,42 @@ describe("RpcSessionFactory", () => {
       expect(configStreamError).toMatchObject({ _tag: "RpcClientError" });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
+    }),
+  );
+
+  it.effect("reads the frames a server deflates for sockets without permessage-deflate", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      const server = deflatingJson.makeUnsafe();
+      const deflated = (message: unknown) => {
+        const frame = server.encode(message);
+        if (!(frame instanceof Uint8Array)) throw new Error("expected a binary frame");
+        return frame;
+      };
+      const configRequest = yield* awaitRequest(socket);
+      socket.serverMessage(
+        deflated({
+          _tag: "Chunk",
+          requestId: configRequest.id,
+          values: [{ version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG }],
+        }),
+      );
+      expect(yield* session.initialConfig).toEqual(SERVER_CONFIG);
+
+      // The second frame back-references the first through the shared window.
+      const probeFiber = yield* Effect.forkChild(session.probe);
+      const probeRequest = yield* awaitRequest(socket, 1);
+      socket.serverMessage(
+        deflated({
+          _tag: "Exit",
+          requestId: probeRequest.id,
+          exit: { _tag: "Success", value: {} },
+        }),
+      );
+      yield* Fiber.join(probeFiber);
     }),
   );
 

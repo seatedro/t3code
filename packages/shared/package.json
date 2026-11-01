@@ -19,6 +19,14 @@
       "types": "./src/delimitedPreview.ts",
       "import": "./src/delimitedPreview.ts"
     },
+    "./rpcFrameCompression": {
+      "types": "./src/rpcFrameCompression.ts",
+      "import": "./src/rpcFrameCompression.ts"
+    },
+    "./rpcFrameDeflate": {
+      "types": "./src/rpcFrameDeflate.ts",
+      "import": "./src/rpcFrameDeflate.ts"
+    },
     "./composerPullRequestMatches": {
       "types": "./src/composerPullRequestMatches.ts",
       "import": "./src/composerPullRequestMatches.ts"
@@ -521,11 +529,13 @@
     "@noble/hashes": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",
+    "fflate": "0.8.3",
     "jose": "catalog:",
     "mdast-util-directive": "catalog:",
     "mdast-util-to-hast": "^13.2.1",
     "micromark-extension-directive": "catalog:",
     "micromark-util-character": "catalog:",
+    "pako": "3.0.3",
     "rehype-raw": "catalog:",
     "rehype-sanitize": "catalog:",
     "remark-breaks": "catalog:",

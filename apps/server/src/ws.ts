@@ -262,6 +262,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import { isNetworkPath } from "@t3tools/shared/path";
+import { deflatingJson, requestsFrameCompression } from "@t3tools/shared/rpcFrameDeflate";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { isTelemetryIdHash } from "@t3tools/shared/telemetryId";
 import {
@@ -3348,6 +3349,12 @@ export const layer = Layer.unwrap(
         );
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* analytics.recordOwners(readClientOwners(request), "client");
+        const serialization = requestsFrameCompression(
+          requestUrl.value,
+          request.headers["sec-websocket-extensions"],
+        )
+          ? Layer.succeed(RpcSerialization.RpcSerialization, deflatingJson)
+          : RpcSerialization.layerJson;
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
@@ -3378,7 +3385,7 @@ export const layer = Layer.unwrap(
         }).pipe(
           Effect.provide(
             layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provideMerge(serialization),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

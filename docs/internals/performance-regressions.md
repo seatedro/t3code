@@ -53,6 +53,11 @@ The v2 checks pin these invariants:
   query, and transcript message bodies stay in thread detail regardless of message size.
 - Shell resume sends deltas plus compact repository-enrichment metadata, not another full project
   and thread snapshot.
+- React Native's iOS socket negotiates no permessage-deflate. Clients ask for
+  `frameCompression=deflate`, and for an upgrade without a permessage-deflate offer the server
+  deflates every RPC frame through one per-socket stream
+  ([rpcFrameCompression](../../packages/shared/src/rpcFrameCompression.ts)). A streamed turn that
+  costs such a client 319 KB raw costs 20 KB this way. Payloads sent around the RPC serializer miss it.
 - Auto, steer, and restart sends resolve delivery from authoritative state inside the
   server's per-thread dispatch lock. Model selection and identified-checkpoint rollback also
   dispatch without first fetching a full thread projection when the server advertises support.
