@@ -15,6 +15,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
+import * as Diffy from "../diffy/Diffy.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { checkpointRefForScopeOrdinal } from "./CheckpointService.ts";
@@ -215,6 +216,7 @@ it.effect("resolves the thread baseline after a second root run replaces scope o
     const layerQuery = CheckpointDiffQuery.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Diffy.layer,
           Layer.mock(ThreadManagement.ThreadManagementService)({
             getCheckpointContext: () => Effect.succeed(context),
           }),

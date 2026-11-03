@@ -913,6 +913,9 @@ importers:
       ffi-rs:
         specifier: 1.3.2
         version: 1.3.2
+      libdiffy:
+        specifier: 0.1.0
+        version: 0.1.0
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15(patch_hash=f1e680afec85f650699ea756f91f469844ec4c976f4f168492a45c6b3f67d651)
@@ -9753,6 +9756,36 @@ packages:
   leven@3.1.0:
     resolution: {integrity: sha512-qsda+H8jTaUaN/x5vzW2rzc+8Rw4TAQ/4KjB46IwK5VH+IlVeeeje/EoZRpiXvIqjFgK84QffqPztGI3VBLG1A==}
     engines: {node: '>=6'}
+
+  libdiffy-darwin-arm64@0.1.0:
+    resolution: {integrity: sha512-NBv0gTPhbAls9Fej3rlTA0BjlKgt5UUlqTtFcynkEJ0OfhxTXRz2m3UfAwiZCpGwd5o4dNrRQdJn1XeAd0Dimg==}
+    engines: {node: '>=18'}
+    cpu: [arm64]
+    os: [darwin]
+
+  libdiffy-darwin-x64@0.1.0:
+    resolution: {integrity: sha512-5ry6cijnW5tLTNAXkTT96bSxPyxXr21ed1Pw42gviEHOsXG3PFepON7MEv0oow/qCpeslWNE3FLzVciU78FPtQ==}
+    engines: {node: '>=18'}
+    cpu: [x64]
+    os: [darwin]
+
+  libdiffy-linux-arm64-gnu@0.1.0:
+    resolution: {integrity: sha512-Dv1DdrgLGFGG15fy9tLwA34LHJBmZseO1bbHp+58zw+LGfrKQ/w2YIt+bLa2ChX9HVr4srumVw65u6Zk2smiWQ==}
+    engines: {node: '>=18'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  libdiffy-linux-x64-gnu@0.1.0:
+    resolution: {integrity: sha512-BxVj6zaPvQ9NlGny1jFAgVBYnjpZUCtt4JdZELPscrgxV3UyaDirw4SMG9AKqFWL8hueno1EU0T7NoW8Wnwv9g==}
+    engines: {node: '>=18'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  libdiffy@0.1.0:
+    resolution: {integrity: sha512-gIv6OTkq7jb/GmZCSIWtxahwW4f+s6Mr8VXd6IZvE0Dib+YX1/MmYmVbdYNDiwCPk+j75YeSxrNAwtcSlkNxxg==}
+    engines: {node: '>=18'}
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
@@ -19601,6 +19634,25 @@ snapshots:
   lazy-val@1.0.5: {}
 
   leven@3.1.0: {}
+
+  libdiffy-darwin-arm64@0.1.0:
+    optional: true
+
+  libdiffy-darwin-x64@0.1.0:
+    optional: true
+
+  libdiffy-linux-arm64-gnu@0.1.0:
+    optional: true
+
+  libdiffy-linux-x64-gnu@0.1.0:
+    optional: true
+
+  libdiffy@0.1.0:
+    optionalDependencies:
+      libdiffy-darwin-arm64: 0.1.0
+      libdiffy-darwin-x64: 0.1.0
+      libdiffy-linux-arm64-gnu: 0.1.0
+      libdiffy-linux-x64-gnu: 0.1.0
 
   libsql@0.5.29:
     dependencies:

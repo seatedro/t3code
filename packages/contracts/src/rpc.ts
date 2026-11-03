@@ -118,6 +118,10 @@ import {
   OrchestrationGetTurnDiffError,
 } from "./checkpointDiff.ts";
 import {
+  OrchestrationExpandTurnDiffGapError,
+  OrchestrationGetTurnSemanticDiffError,
+} from "./semanticDiff.ts";
+import {
   WorktreeSetupCancelInput,
   WorktreeSetupCancelResult,
   WorktreeSetupStreamEvent,
@@ -1779,6 +1783,24 @@ const WsOrchestrationV2GetFullThreadDiffRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetTurnSemanticDiffRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTurnSemanticDiff,
+  {
+    payload: OrchestrationV2RpcSchemas.getTurnSemanticDiff.input,
+    success: OrchestrationV2RpcSchemas.getTurnSemanticDiff.output,
+    error: Schema.Union([OrchestrationGetTurnSemanticDiffError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsOrchestrationV2ExpandTurnDiffGapRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.expandTurnDiffGap,
+  {
+    payload: OrchestrationV2RpcSchemas.expandTurnDiffGap.input,
+    success: OrchestrationV2RpcSchemas.expandTurnDiffGap.output,
+    error: Schema.Union([OrchestrationExpandTurnDiffGapError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2SearchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.searchThread, {
   payload: OrchestrationV2SearchThreadInput,
   success: OrchestrationV2SearchThreadResult,
@@ -2296,6 +2318,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetTurnItemRpc,
   WsOrchestrationV2GetTurnDiffRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
+  WsOrchestrationV2GetTurnSemanticDiffRpc,
+  WsOrchestrationV2ExpandTurnDiffGapRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2SearchThreadRpc,
   WsOrchestrationV2SearchThreadStreamRpc,

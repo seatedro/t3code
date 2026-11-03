@@ -307,3 +307,8 @@ minimumReleaseAgeExclude:
   - "@effect/tsgo-win32-arm64@0.67.1"
   - "@effect/tsgo-win32-x64@0.67.1"
   - "@effect/tsgo@0.67.1"
+  - libdiffy-darwin-arm64@0.1.0
+  - libdiffy-darwin-x64@0.1.0
+  - libdiffy-linux-arm64-gnu@0.1.0
+  - libdiffy-linux-x64-gnu@0.1.0
+  - libdiffy@0.1.0
