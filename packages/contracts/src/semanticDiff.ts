@@ -3,6 +3,7 @@ import * as Struct from "effect/Struct";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { TurnCountRange } from "./checkpointDiff.ts";
+import { PullRequestRef } from "./pullRequest.ts";
 
 // Diffy's display format, version 1: https://github.com/seatedro/diffy/blob/master/crates/diffy-compare/FORMAT.md
 // Field names follow the format so the server forwards Diffy's output untouched.
@@ -201,6 +202,112 @@ export class OrchestrationGetTurnSemanticDiffError extends Schema.TaggedError<Or
 
 export class OrchestrationExpandTurnDiffGapError extends Schema.TaggedError<OrchestrationExpandTurnDiffGapError>()(
   "OrchestrationExpandTurnDiffGapError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+const SemanticDiffRequestFields = {
+  /** Add syntax spans, so the client needs no highlighter. */
+  syntax: Schema.optionalKey(Schema.Boolean),
+  /** Only these files, by new or old path. */
+  paths: Schema.optionalKey(Schema.Array(Schema.String)),
+};
+
+const SemanticDiffGapFields = {
+  status: SemanticDiffFileStatus,
+  old_path: Schema.optionalKey(Schema.String),
+  new_path: Schema.optionalKey(Schema.String),
+  gap: SemanticDiffGap,
+  syntax: Schema.optionalKey(Schema.Boolean),
+};
+
+const SemanticDiffImageFields = {
+  side: Schema.Literals(["old", "new"]),
+  path: Schema.String,
+};
+
+/** An image file's bytes, for showing it in place of its diff. */
+export const SemanticDiffImage = Schema.Struct({
+  mime: TrimmedNonEmptyString,
+  base64: Schema.String,
+  bytes: Schema.Number,
+});
+export type SemanticDiffImage = typeof SemanticDiffImage.Type;
+
+/** Null when the file isn't an image this server shows, or is too large to send. */
+export const SemanticDiffImageResult = Schema.Struct({ image: Schema.NullOr(SemanticDiffImage) });
+export type SemanticDiffImageResult = typeof SemanticDiffImageResult.Type;
+
+export const OrchestrationGetTurnDiffImageInput = TurnCountRange.mapFields(
+  Struct.assign({ threadId: ThreadId, ...SemanticDiffImageFields }),
+  { unsafePreserveChecks: true },
+);
+export type OrchestrationGetTurnDiffImageInput = typeof OrchestrationGetTurnDiffImageInput.Type;
+
+/** A checkout's branch against its base: the merge base against the working tree. */
+export const ReviewSemanticDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseRef: Schema.optionalKey(TrimmedNonEmptyString),
+  ...SemanticDiffRequestFields,
+});
+export type ReviewSemanticDiffInput = typeof ReviewSemanticDiffInput.Type;
+
+export const ReviewSemanticDiffResult = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  /** The base compared against, such as "origin/main"; null when the branch has none. */
+  baseRef: Schema.NullOr(TrimmedNonEmptyString),
+  /** Null when this server has no Diffy build for its platform; use `review.getDiffPreview`. */
+  files: Schema.NullOr(Schema.Array(SemanticDiffFile)),
+  omitted: Schema.Array(SemanticDiffOmittedFile),
+});
+export type ReviewSemanticDiffResult = typeof ReviewSemanticDiffResult.Type;
+
+export const ReviewExpandDiffGapInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseRef: Schema.optionalKey(TrimmedNonEmptyString),
+  ...SemanticDiffGapFields,
+});
+export type ReviewExpandDiffGapInput = typeof ReviewExpandDiffGapInput.Type;
+
+export const ReviewDiffImageInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseRef: Schema.optionalKey(TrimmedNonEmptyString),
+  ...SemanticDiffImageFields,
+});
+export type ReviewDiffImageInput = typeof ReviewDiffImageInput.Type;
+
+export const PullRequestSemanticDiffInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  ...SemanticDiffRequestFields,
+});
+export type PullRequestSemanticDiffInput = typeof PullRequestSemanticDiffInput.Type;
+
+export const PullRequestSemanticDiffResult = Schema.Struct({
+  /**
+   * Null when this server can't diff the PR from its own clone (no Diffy build, the PR's commits
+   * aren't here, or its files don't match the host's); use `pullRequests.diff`.
+   */
+  files: Schema.NullOr(Schema.Array(SemanticDiffFile)),
+  omitted: Schema.Array(SemanticDiffOmittedFile),
+});
+export type PullRequestSemanticDiffResult = typeof PullRequestSemanticDiffResult.Type;
+
+export const PullRequestExpandDiffGapInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  ...SemanticDiffGapFields,
+});
+export type PullRequestExpandDiffGapInput = typeof PullRequestExpandDiffGapInput.Type;
+
+export const PullRequestDiffImageInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  ...SemanticDiffImageFields,
+});
+export type PullRequestDiffImageInput = typeof PullRequestDiffImageInput.Type;
+
+export class SemanticDiffError extends Schema.TaggedError<SemanticDiffError>()(
+  "SemanticDiffError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

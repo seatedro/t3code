@@ -4,8 +4,8 @@ import {
   type OrchestrationExpandTurnDiffGapResult,
   type OrchestrationGetTurnSemanticDiffInput,
   type OrchestrationGetTurnSemanticDiffResult,
-  type SemanticDiffFileStatus,
-  type SemanticDiffOmittedFile,
+  type OrchestrationGetTurnDiffImageInput,
+  type SemanticDiffImageResult,
   type OrchestrationGetFullThreadDiffInput,
   type OrchestrationGetFullThreadDiffResult,
   type OrchestrationGetTurnDiffInput,
@@ -20,7 +20,17 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as Diffy from "../diffy/Diffy.ts";
-import type { DiffyError, DiffyFileInput } from "../diffy/Diffy.ts";
+import type { DiffyError } from "../diffy/Diffy.ts";
+import {
+  filterPaths,
+  gapFileInput,
+  imageMimeType,
+  imageResult,
+  planSemanticDiff,
+  SEMANTIC_DIFF_MAX_FILE_BYTES,
+  SEMANTIC_DIFF_MAX_IMAGE_BYTES,
+  withGitCounts,
+} from "../diffy/semanticDiffFiles.ts";
 import { CHECKPOINT_DIFF_MAX_OUTPUT_BYTES } from "../vcs/VcsDriver.ts";
 import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -39,13 +49,6 @@ import { isGitImport, parseTurnDiffFilesFromNumstat, type TurnDiffFileSummary } 
 // Windows limits a command line to 32,767 characters. Leave room for the rest of git's arguments.
 const MAX_PATHSPEC_CHARS = 24_000;
 const DIFF_TRUNCATED_MARKER = "\n\n[truncated]";
-// Diffy's semantic diff gives up past 1 MiB a side, and so does its highlighter.
-const SEMANTIC_DIFF_MAX_FILE_BYTES = 1_048_576;
-const OMITTED_REASON = {
-  too_large: "too_large",
-  over_budget: "request_too_large",
-  unreadable: "unreadable",
-} as const satisfies Record<string, SemanticDiffOmittedFile["reason"]>;
 
 function batchFilePaths(files: ReadonlyArray<TurnDiffFileSummary>) {
   const batches: string[][] = [];
@@ -84,6 +87,9 @@ export class CheckpointDiffQuery extends Context.Service<
     readonly expandTurnDiffGap: (
       input: OrchestrationExpandTurnDiffGapInput,
     ) => Effect.Effect<OrchestrationExpandTurnDiffGapResult, CheckpointServiceError | DiffyError>;
+    readonly getTurnDiffImage: (
+      input: OrchestrationGetTurnDiffImageInput,
+    ) => Effect.Effect<SemanticDiffImageResult, CheckpointServiceError>;
   }
 >()("t3/checkpointing/CheckpointDiffQuery") {}
 
@@ -373,15 +379,7 @@ export const make = Effect.gen(function* () {
       false,
     );
     const { retainedFiles: turnFiles } = yield* listTurnFiles(comparison, true);
-    const paths = input.paths === undefined ? undefined : new Set(input.paths);
-    const retainedFiles =
-      paths === undefined
-        ? turnFiles
-        : turnFiles.filter(
-            (file) =>
-              paths.has(file.path) ||
-              (file.previousPath !== undefined && paths.has(file.previousPath)),
-          );
+    const retainedFiles = filterPaths(turnFiles, input.paths);
     const reads = yield* checkpointStore.readObjects({
       cwd: comparison.cwd,
       revisions: retainedFiles.flatMap((file) => [
@@ -391,60 +389,14 @@ export const make = Effect.gen(function* () {
       maxObjectBytes: SEMANTIC_DIFF_MAX_FILE_BYTES,
       maxTotalBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
     });
-
-    const inputs: DiffyFileInput[] = [];
-    const counted: TurnDiffFileSummary[] = [];
-    const omitted: SemanticDiffOmittedFile[] = [];
-    retainedFiles.forEach((file, index) => {
-      const before = reads[index * 2]!;
-      const after = reads[index * 2 + 1]!;
-      const status: SemanticDiffFileStatus =
-        file.previousPath !== undefined
-          ? "renamed"
-          : before._tag === "missing"
-            ? "added"
-            : after._tag === "missing"
-              ? "deleted"
-              : "modified";
-      const paths = {
-        ...(status === "added" ? {} : { old_path: file.previousPath ?? file.path }),
-        ...(status === "deleted" ? {} : { new_path: file.path }),
-      };
-      const unread = [before, after].find(
-        (read) => read._tag !== "read" && read._tag !== "missing",
-      );
-      if (unread !== undefined || (before._tag === "missing" && after._tag === "missing")) {
-        omitted.push({
-          status,
-          ...paths,
-          additions: file.additions,
-          deletions: file.deletions,
-          reason: OMITTED_REASON[unread?._tag ?? "unreadable"],
-        });
-        return;
-      }
-      counted.push(file);
-      inputs.push({
-        status,
-        ...paths,
-        ...(before._tag === "read" ? { old: before.bytes } : {}),
-        ...(after._tag === "read" ? { new: after.bytes } : {}),
-      });
-    });
-
+    const { inputs, counted, omitted } = planSemanticDiff(
+      retainedFiles,
+      retainedFiles.map((_, index) => [reads[index * 2]!, reads[index * 2 + 1]!] as const),
+    );
     const files = yield* diffy.diff(inputs, { syntax: input.syntax ?? false });
     return {
       ...range,
-      // Git's counts, so a file reads the same here as in the turn's summary.
-      files: Option.getOrNull(
-        Option.map(files, (diffed) =>
-          diffed.map((file, index) => ({
-            ...file,
-            additions: counted[index]!.additions,
-            deletions: counted[index]!.deletions,
-          })),
-        ),
-      ),
+      files: Option.getOrNull(Option.map(files, (diffed) => withGitCounts(diffed, counted))),
       omitted,
     };
   });
@@ -470,18 +422,30 @@ export const make = Effect.gen(function* () {
       maxTotalBytes: 2 * SEMANTIC_DIFF_MAX_FILE_BYTES,
     });
     const [before, after] = sides[0] === undefined ? [undefined, reads[0]] : [reads[0], reads[1]];
-    const rows = yield* diffy.expand(
-      {
-        status: input.status,
-        ...(input.old_path === undefined ? {} : { old_path: input.old_path }),
-        ...(input.new_path === undefined ? {} : { new_path: input.new_path }),
-        ...(before?._tag === "read" ? { old: before.bytes } : {}),
-        ...(after?._tag === "read" ? { new: after.bytes } : {}),
-      },
-      input.gap,
-      { syntax: input.syntax ?? false },
-    );
+    const rows = yield* diffy.expand(gapFileInput(input, before, after), input.gap, {
+      syntax: input.syntax ?? false,
+    });
     return { rows: Option.getOrElse(rows, () => []) };
+  });
+
+  const getTurnDiffImage: CheckpointDiffQuery["Service"]["getTurnDiffImage"] = Effect.fn(
+    "CheckpointDiffQuery.getTurnDiffImage",
+  )(function* (input) {
+    if (imageMimeType(input.path) === null) return { image: null };
+    const comparison = yield* resolveComparison(
+      input,
+      "CheckpointDiffQuery.getTurnDiffImage",
+      false,
+    );
+    const [read] = yield* checkpointStore.readObjects({
+      cwd: comparison.cwd,
+      revisions: [
+        `${input.side === "old" ? comparison.fromCheckpointRef : comparison.toCheckpointRef}:${input.path}`,
+      ],
+      maxObjectBytes: SEMANTIC_DIFF_MAX_IMAGE_BYTES,
+      maxTotalBytes: SEMANTIC_DIFF_MAX_IMAGE_BYTES,
+    });
+    return imageResult(input.path, read);
   });
 
   return CheckpointDiffQuery.of({
@@ -489,6 +453,7 @@ export const make = Effect.gen(function* () {
     getFullThreadDiff,
     getTurnSemanticDiff,
     expandTurnDiffGap,
+    getTurnDiffImage,
   });
 });
 

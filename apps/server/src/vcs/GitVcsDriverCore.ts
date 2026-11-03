@@ -3258,6 +3258,86 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
+  const readReviewNumstat = Effect.fn("GitVcsDriver.readReviewNumstat")(function* (
+    cwd: string,
+    revisions: ReadonlyArray<string>,
+    env?: NodeJS.ProcessEnv,
+  ) {
+    const args = [...REVIEW_DIFF_ARGS, "--numstat", "-z", ...revisions, "--"];
+    const result = yield* executeGit("GitVcsDriver.readReviewNumstat", cwd, args, {
+      allowNonZeroExit: true,
+      maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
+      env,
+    });
+    if (result.exitCode === 0) return parseReviewNumstat(result.stdout);
+    return yield* new GitCommandError({
+      ...gitCommandContext({ operation: "GitVcsDriver.readReviewNumstat", cwd, args }),
+      detail: "Could not list the changed files.",
+      exitCode: result.exitCode,
+    });
+  });
+
+  const listBranchReviewFiles: GitVcsDriver.GitVcsDriver["Service"]["listBranchReviewFiles"] =
+    Effect.fn("GitVcsDriver.listBranchReviewFiles")(function* (input) {
+      const repository = yield* resolveRepositoryPathsUncached(input.cwd).pipe(
+        Effect.catchTags({
+          GitCommandError: (error) =>
+            isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
+        }),
+      );
+      if (!repository?.worktreeRoot) return null;
+      const root = repository.worktreeRoot;
+      const review = yield* resolveReviewMergeBase(root, repository.currentBranch, input.baseRef);
+      const untracked = yield* prepareUntrackedReviewIndex(root, []);
+      const unborn =
+        review.mergeBase === "HEAD" &&
+        (yield* executeGit(
+          "GitVcsDriver.listBranchReviewFiles.head",
+          root,
+          ["rev-parse", "--verify", "--quiet", "HEAD"],
+          { allowNonZeroExit: true },
+        )).exitCode !== 0;
+      const oldRevision = unborn ? yield* readEmptyTreeHash(root) : review.mergeBase;
+      const files = yield* readReviewNumstat(root, [oldRevision], untracked?.env);
+      return { root, baseRef: review.baseRef, oldRevision, files };
+    }, Effect.scoped);
+
+  const listCommitRangeFiles: GitVcsDriver.GitVcsDriver["Service"]["listCommitRangeFiles"] = (
+    cwd,
+    from,
+    to,
+  ) => readReviewNumstat(cwd, [from, to]);
+
+  const resolvePullRequestBase: GitVcsDriver.GitVcsDriver["Service"]["resolvePullRequestBase"] =
+    Effect.fn("GitVcsDriver.resolvePullRequestBase")(function* (input) {
+      const head = yield* executeGit(
+        "GitVcsDriver.resolvePullRequestBase.head",
+        input.cwd,
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.headSha}^{commit}`],
+        { allowNonZeroExit: true },
+      );
+      const headSha = head.stdout.trim();
+      if (head.exitCode !== 0 || headSha.length === 0) return null;
+      const remote = yield* resolvePrimaryRemoteName(input.cwd).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      const candidates = [
+        ...(remote === null ? [] : [`refs/remotes/${remote}/${input.baseBranch}`]),
+        `refs/heads/${input.baseBranch}`,
+      ];
+      for (const candidate of candidates) {
+        const result = yield* executeGit(
+          "GitVcsDriver.resolvePullRequestBase.mergeBase",
+          input.cwd,
+          ["merge-base", "--end-of-options", candidate, headSha],
+          { allowNonZeroExit: true },
+        );
+        const mergeBase = result.stdout.trim();
+        if (result.exitCode === 0 && mergeBase.length > 0) return { mergeBase, headSha };
+      }
+      return null;
+    });
+
   const reviewDiffFileError = (
     input: ReviewDiffFileContentsInput,
     detail: string,
@@ -4636,6 +4716,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readRangeContext,
     getReviewDiffPreview,
     getReviewDiffFileContents,
+    listBranchReviewFiles,
+    listCommitRangeFiles,
+    resolvePullRequestBase,
     readConfigValue,
     readBranchBase,
     resolveBranchName,

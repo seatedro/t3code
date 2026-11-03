@@ -24,6 +24,7 @@ import {
   type ReviewDiffPreviewResult,
   type ReviewDiffFileContentsInput,
   type ReviewDiffFileContentsResult,
+  type ReviewDiffFileStat,
   type VcsInitInput,
   type VcsListRefsInput,
   type VcsListRefsResult,
@@ -341,6 +342,39 @@ export class GitVcsDriver extends Context.Service<
     readonly getReviewDiffFileContents: (
       input: ReviewDiffFileContentsInput,
     ) => Effect.Effect<ReviewDiffFileContentsResult, GitCommandError>;
+    /**
+     * The checkout's changed files against its branch's merge base, untracked included, as review
+     * compares them. Null outside a repository. `oldRevision` names the old side.
+     */
+    readonly listBranchReviewFiles: (input: {
+      readonly cwd: string;
+      readonly baseRef?: string | undefined;
+    }) => Effect.Effect<
+      {
+        readonly root: string;
+        readonly baseRef: string | null;
+        readonly oldRevision: string;
+        readonly files: ReadonlyArray<ReviewDiffFileStat>;
+      } | null,
+      GitCommandError
+    >;
+    readonly listCommitRangeFiles: (
+      cwd: string,
+      from: string,
+      to: string,
+    ) => Effect.Effect<ReadonlyArray<ReviewDiffFileStat>, GitCommandError>;
+    /**
+     * Where a PR's changes start, from this clone: the merge base of its head and its base
+     * branch. Null when the head commit isn't here or shares no history with the base.
+     */
+    readonly resolvePullRequestBase: (input: {
+      readonly cwd: string;
+      readonly headSha: string;
+      readonly baseBranch: string;
+    }) => Effect.Effect<
+      { readonly mergeBase: string; readonly headSha: string } | null,
+      GitCommandError
+    >;
     readonly readConfigValue: (
       cwd: string,
       key: string,
