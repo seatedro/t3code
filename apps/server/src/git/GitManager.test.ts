@@ -3443,10 +3443,25 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             }),
         },
       });
-      const failed = yield* runStackedAction(manager, { cwd: repoDir, action: "push" }).pipe(
-        Effect.flip,
+      const events: GitActionProgressEvent[] = [];
+      const failed = yield* runStackedAction(
+        manager,
+        { cwd: repoDir, action: "push" },
+        {
+          actionId: "action-rejected-push",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+      const detail = failed._tag === "GitCommandError" ? failed.detail : null;
+      expect(detail).toBeTypeOf("string");
+      expect(events.at(-1)).toEqual(
+        expect.objectContaining({ kind: "action_failed", phase: "push", message: detail }),
       );
-      expect(failed).toBeDefined();
       const result = yield* runStackedAction(manager, { cwd: repoDir, action: "push" });
 
       expect(result.push.status).toBe("pushed");
