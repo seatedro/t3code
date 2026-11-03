@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProjectId, type PullRequestDetail } from "@t3tools/contracts";
+import {
+  type OrchestrationProjectShell,
+  ProjectId,
+  type PullRequestDetail,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -10,6 +14,7 @@ import * as Diffy from "../diffy/Diffy.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestSemanticDiff from "./PullRequestSemanticDiff.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 
@@ -25,7 +30,13 @@ it.effect("diffs a PR from the clone, open or merged, only when its files match 
     const layer = PullRequestSemanticDiff.layer.pipe(
       Layer.provide(
         Layer.mock(PullRequestService.PullRequestService)({
-          detail: () => Effect.succeed({ workspaceRoot: cwd, ...detail } as PullRequestDetail),
+          detail: () => Effect.succeed({ workspaceRoot: baseDir, ...detail } as PullRequestDetail),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ProjectService.ProjectService)({
+          // The PR's own project; the host's read was routed through a project elsewhere.
+          getShell: () => Effect.succeedSome({ workspaceRoot: cwd } as OrchestrationProjectShell),
         }),
       ),
       Layer.provide(Diffy.layer),
