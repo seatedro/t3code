@@ -152,6 +152,7 @@ import {
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  GitPreviewChangeRequestResult,
   VcsPullInput,
   GitPullRequestRefInput,
   VcsPullResult,
@@ -484,6 +485,7 @@ export const WS_METHODS = {
 
   gitRunStackedAction: "git.runStackedAction",
   gitResolvePullRequest: "git.resolvePullRequest",
+  gitPreviewChangeRequest: "git.previewChangeRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
   reviewGetDiffPreview: "review.getDiffPreview",
@@ -1522,6 +1524,12 @@ const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequest, {
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsGitPreviewChangeRequestRpc = Rpc.make(WS_METHODS.gitPreviewChangeRequest, {
+  payload: VcsStatusInput,
+  success: GitPreviewChangeRequestResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
 const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullRequestThread, {
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
@@ -2253,6 +2261,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsGitPreviewChangeRequestRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
