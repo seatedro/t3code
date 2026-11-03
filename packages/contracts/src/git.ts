@@ -304,6 +304,18 @@ export const GitResolvePullRequestResult = Schema.Struct({
 });
 export type GitResolvePullRequestResult = typeof GitResolvePullRequestResult.Type;
 
+/** What Open PR would open from a checkout: the base the server picks, and the commits ahead of it. */
+export const GitPreviewChangeRequestResult = Schema.Struct({
+  /** Null on a detached HEAD, where Open PR can't run. */
+  baseBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  /** Newest first, at most `GIT_PREVIEW_MAX_COMMITS`. */
+  commits: Schema.Array(
+    Schema.Struct({ sha: TrimmedNonEmptyStringSchema, subject: Schema.String }),
+  ),
+});
+export type GitPreviewChangeRequestResult = typeof GitPreviewChangeRequestResult.Type;
+export const GIT_PREVIEW_MAX_COMMITS = 20;
+
 export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   branch: TrimmedNonEmptyStringSchema,

@@ -363,6 +363,12 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       current: { readonly branch: string; readonly hasUpstream: boolean },
     ) => Effect.Effect<GitPushTarget | null, GitCommandError>;
+    /** Commits on HEAD that aren't on `baseRef`, newest first. */
+    readonly readCommitSubjects: (
+      cwd: string,
+      baseRef: string,
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<{ sha: string; subject: string }>, GitCommandError>;
     readonly readRangeContext: (
       cwd: string,
       baseRef: string,
