@@ -462,6 +462,7 @@ const layerKnownWorkspaces = KnownWorkspaces.layer.pipe(
 );
 
 const layerReview = ReviewService.layer.pipe(
+  Layer.provide(Diffy.layer),
   Layer.provideMerge(layerKnownWorkspaces),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),
