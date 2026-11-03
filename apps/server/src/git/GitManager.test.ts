@@ -3444,6 +3444,10 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         },
       });
 
+      const preview = yield* manager.previewChangeRequest({ cwd: repoDir });
+      expect(preview.baseBranch).toBe("master");
+      expect(preview.commits.map((commit) => commit.subject)).toEqual(["Master default"]);
+
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "create_pr",
