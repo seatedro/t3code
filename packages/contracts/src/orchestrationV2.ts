@@ -58,6 +58,8 @@ import {
 import {
   OrchestrationExpandTurnDiffGapInput,
   OrchestrationExpandTurnDiffGapResult,
+  OrchestrationGetTurnDiffImageInput,
+  SemanticDiffImageResult,
   OrchestrationGetTurnSemanticDiffInput,
   OrchestrationGetTurnSemanticDiffResult,
 } from "./semanticDiff.ts";
@@ -3599,6 +3601,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   getTurnSemanticDiff: "orchestration.getTurnSemanticDiff",
   expandTurnDiffGap: "orchestration.expandTurnDiffGap",
+  getTurnDiffImage: "orchestration.getTurnDiffImage",
   searchThreads: "orchestration.searchThreads",
   searchThread: "orchestration.searchThread",
   searchThreadStream: "orchestration.searchThreadStream",
@@ -4258,6 +4261,10 @@ export const OrchestrationV2RpcSchemas = {
   expandTurnDiffGap: {
     input: OrchestrationExpandTurnDiffGapInput,
     output: OrchestrationExpandTurnDiffGapResult,
+  },
+  getTurnDiffImage: {
+    input: OrchestrationGetTurnDiffImageInput,
+    output: SemanticDiffImageResult,
   },
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),

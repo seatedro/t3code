@@ -120,6 +120,17 @@ import {
 import {
   OrchestrationExpandTurnDiffGapError,
   OrchestrationGetTurnSemanticDiffError,
+  PullRequestDiffImageInput,
+  PullRequestExpandDiffGapInput,
+  PullRequestSemanticDiffInput,
+  PullRequestSemanticDiffResult,
+  ReviewDiffImageInput,
+  ReviewExpandDiffGapInput,
+  ReviewSemanticDiffInput,
+  ReviewSemanticDiffResult,
+  OrchestrationExpandTurnDiffGapResult,
+  SemanticDiffError,
+  SemanticDiffImageResult,
 } from "./semanticDiff.ts";
 import {
   WorktreeSetupCancelInput,
@@ -489,6 +500,9 @@ export const WS_METHODS = {
   reviewGetBranchCommits: "review.getBranchCommits",
   reviewGetDiffPreview: "review.getDiffPreview",
   reviewGetDiffFileContents: "review.getDiffFileContents",
+  reviewGetSemanticDiff: "review.getSemanticDiff",
+  reviewExpandDiffGap: "review.expandDiffGap",
+  reviewGetDiffImage: "review.getDiffImage",
 
   terminalOpen: "terminal.open",
   terminalAttach: "terminal.attach",
@@ -602,6 +616,9 @@ export const WS_METHODS = {
   pullRequestsGenerateReviewGuide: "pullRequests.generateReviewGuide",
   pullRequestsThreadComments: "pullRequests.threadComments",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
+  pullRequestsSemanticDiff: "pullRequests.semanticDiff",
+  pullRequestsExpandDiffGap: "pullRequests.expandDiffGap",
+  pullRequestsDiffImage: "pullRequests.diffImage",
   pullRequestsFilesViewed: "pullRequests.filesViewed",
   pullRequestsChangeBreakdown: "pullRequests.changeBreakdown",
   pullRequestsSetFilesViewed: "pullRequests.setFilesViewed",
@@ -1139,6 +1156,24 @@ const WsPullRequestsDiffFileContentsRpc = Rpc.make(WS_METHODS.pullRequestsDiffFi
   error: PullRequestRpcError,
 });
 
+const WsPullRequestsSemanticDiffRpc = Rpc.make(WS_METHODS.pullRequestsSemanticDiff, {
+  payload: PullRequestSemanticDiffInput,
+  success: PullRequestSemanticDiffResult,
+  error: Schema.Union([SemanticDiffError, PullRequestRpcError]),
+});
+
+const WsPullRequestsExpandDiffGapRpc = Rpc.make(WS_METHODS.pullRequestsExpandDiffGap, {
+  payload: PullRequestExpandDiffGapInput,
+  success: OrchestrationExpandTurnDiffGapResult,
+  error: Schema.Union([SemanticDiffError, PullRequestRpcError]),
+});
+
+const WsPullRequestsDiffImageRpc = Rpc.make(WS_METHODS.pullRequestsDiffImage, {
+  payload: PullRequestDiffImageInput,
+  success: SemanticDiffImageResult,
+  error: Schema.Union([SemanticDiffError, PullRequestRpcError]),
+});
+
 const WsPullRequestsFilesViewedRpc = Rpc.make(WS_METHODS.pullRequestsFilesViewed, {
   payload: PullRequestRef,
   success: PullRequestFilesViewedResult,
@@ -1592,6 +1627,24 @@ const WsReviewGetDiffFileContentsRpc = Rpc.make(WS_METHODS.reviewGetDiffFileCont
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
 });
 
+const WsReviewGetSemanticDiffRpc = Rpc.make(WS_METHODS.reviewGetSemanticDiff, {
+  payload: ReviewSemanticDiffInput,
+  success: ReviewSemanticDiffResult,
+  error: Schema.Union([SemanticDiffError, EnvironmentAuthorizationError]),
+});
+
+const WsReviewExpandDiffGapRpc = Rpc.make(WS_METHODS.reviewExpandDiffGap, {
+  payload: ReviewExpandDiffGapInput,
+  success: OrchestrationExpandTurnDiffGapResult,
+  error: Schema.Union([SemanticDiffError, EnvironmentAuthorizationError]),
+});
+
+const WsReviewGetDiffImageRpc = Rpc.make(WS_METHODS.reviewGetDiffImage, {
+  payload: ReviewDiffImageInput,
+  success: SemanticDiffImageResult,
+  error: Schema.Union([SemanticDiffError, EnvironmentAuthorizationError]),
+});
+
 const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
@@ -1798,6 +1851,15 @@ const WsOrchestrationV2ExpandTurnDiffGapRpc = Rpc.make(
     payload: OrchestrationV2RpcSchemas.expandTurnDiffGap.input,
     success: OrchestrationV2RpcSchemas.expandTurnDiffGap.output,
     error: Schema.Union([OrchestrationExpandTurnDiffGapError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsOrchestrationV2GetTurnDiffImageRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTurnDiffImage,
+  {
+    payload: OrchestrationV2RpcSchemas.getTurnDiffImage.input,
+    success: OrchestrationV2RpcSchemas.getTurnDiffImage.output,
+    error: Schema.Union([SemanticDiffError, EnvironmentAuthorizationError]),
   },
 );
 
@@ -2204,6 +2266,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsGenerateReviewGuideRpc,
   WsPullRequestsThreadCommentsRpc,
   WsPullRequestsDiffFileContentsRpc,
+  WsPullRequestsSemanticDiffRpc,
+  WsPullRequestsExpandDiffGapRpc,
+  WsPullRequestsDiffImageRpc,
   WsPullRequestsFilesViewedRpc,
   WsPullRequestsChangeBreakdownRpc,
   WsPullRequestsSetFilesViewedRpc,
@@ -2276,6 +2341,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewGetBranchCommitsRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
+  WsReviewGetSemanticDiffRpc,
+  WsReviewExpandDiffGapRpc,
+  WsReviewGetDiffImageRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalObserveRpc,
@@ -2320,6 +2388,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2GetTurnSemanticDiffRpc,
   WsOrchestrationV2ExpandTurnDiffGapRpc,
+  WsOrchestrationV2GetTurnDiffImageRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2SearchThreadRpc,
   WsOrchestrationV2SearchThreadStreamRpc,
