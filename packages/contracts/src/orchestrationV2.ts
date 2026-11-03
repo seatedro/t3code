@@ -54,6 +54,12 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
+import {
+  OrchestrationExpandTurnDiffGapInput,
+  OrchestrationExpandTurnDiffGapResult,
+  OrchestrationGetTurnSemanticDiffInput,
+  OrchestrationGetTurnSemanticDiffResult,
+} from "./semanticDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
   ThreadLinkedPullRequest,
@@ -3501,6 +3507,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
+  getTurnSemanticDiff: "orchestration.getTurnSemanticDiff",
+  expandTurnDiffGap: "orchestration.expandTurnDiffGap",
   searchThreads: "orchestration.searchThreads",
   searchThread: "orchestration.searchThread",
   searchThreadStream: "orchestration.searchThreadStream",
@@ -4060,6 +4068,14 @@ export const OrchestrationV2RpcSchemas = {
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
     output: OrchestrationGetFullThreadDiffResult,
+  },
+  getTurnSemanticDiff: {
+    input: OrchestrationGetTurnSemanticDiffInput,
+    output: OrchestrationGetTurnSemanticDiffResult,
+  },
+  expandTurnDiffGap: {
+    input: OrchestrationExpandTurnDiffGapInput,
+    output: OrchestrationExpandTurnDiffGapResult,
   },
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),

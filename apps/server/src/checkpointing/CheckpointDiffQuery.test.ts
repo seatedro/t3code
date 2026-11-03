@@ -13,6 +13,7 @@ import type { ProjectionCheckpointContext } from "../orchestration-v2/Projection
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as Diffy from "../diffy/Diffy.ts";
 import * as CheckpointDiffQuery from "./CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import { CheckpointRefUnavailableError, CheckpointTurnRangeUnavailableError } from "./Errors.ts";
@@ -55,6 +56,7 @@ function layerFor(input: {
   return CheckpointDiffQuery.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Diffy.layer,
         Layer.mock(ThreadManagement.ThreadManagementService)({
           getCheckpointContext: () => input.projection,
         }),
@@ -197,6 +199,7 @@ const layerStore = CheckpointStore.layer.pipe(
 );
 const layerTest = Layer.merge(layerStore, layerVcsProcess).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Diffy.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -343,3 +346,119 @@ it.effect("preserves an exact-fit filtered patch across batches without a marker
     assert.strictEqual(patchReads, 2);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("diffs a turn semantically from real checkpoint contents", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const process = yield* VcsProcess.VcsProcess;
+    const store = yield* CheckpointStore.CheckpointStore;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-semantic-diff-" });
+    const git = (args: ReadonlyArray<string>) =>
+      process.run({ operation: "CheckpointDiffQuery.test.git", command: "git", cwd, args });
+    const write = (file: string, contents: string) =>
+      fs.writeFileString(path.join(cwd, file), contents);
+    const rust = (body: string) => `fn total() -> u32 {\n    ${body}\n}\n\nfn other() {}\n`;
+    const renamed = Array.from({ length: 40 }, (_, line) => `line ${line} ✓\n`).join("");
+    yield* git(["init"]);
+    yield* git(["config", "user.email", "test@test.com"]);
+    yield* git(["config", "user.name", "Test"]);
+    yield* write("lib.rs", rust("1 + 1"));
+    yield* write("gone.txt", "bye\n");
+    yield* write("old-name.txt", renamed);
+    yield* write("big.txt", "small\n");
+    yield* git(["add", "."]);
+    yield* git(["commit", "-m", "initial"]);
+
+    const scopeId = CheckpointScopeId.make("scope:semantic-runtime");
+    const runId = RunId.make("run:semantic-runtime");
+    const fromCheckpointRef = yield* checkpointRefForScopeOrdinal({
+      scopeId,
+      ordinalWithinScope: 0,
+    });
+    const toCheckpointRef = CheckpointRef.make("refs/t3/test/semantic-after");
+    yield* store.captureCheckpoint({ cwd, checkpointRef: fromCheckpointRef });
+    yield* write("lib.rs", rust("2 + 2"));
+    yield* fs.remove(path.join(cwd, "gone.txt"));
+    yield* fs.rename(path.join(cwd, "old-name.txt"), path.join(cwd, "new-name.txt"));
+    yield* write("added.txt", "héllo\n");
+    yield* write("big.txt", "x".repeat(1_100_000));
+    yield* store.captureCheckpoint({ cwd, checkpointRef: toCheckpointRef });
+
+    const query = yield* CheckpointDiffQuery.make.pipe(
+      Effect.provide(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getCheckpointContext: () =>
+            Effect.succeed({
+              runs: [{ id: runId, ordinal: 1, status: "completed" }],
+              checkpointScopes: [{ id: scopeId, runId, kind: "root_run", cwd }],
+              checkpoints: [
+                {
+                  scopeId,
+                  runId,
+                  ordinalWithinScope: 1,
+                  appRunOrdinal: 1,
+                  status: "ready",
+                  ref: toCheckpointRef,
+                },
+              ],
+            }),
+        }),
+      ),
+    );
+    const range = { threadId, fromTurnCount: 0, toTurnCount: 1 };
+    const result = yield* query.getTurnSemanticDiff(range);
+
+    assert.deepEqual(
+      result.files?.map((file) => [file.status, file.old_path, file.new_path]),
+      [
+        ["added", undefined, "added.txt"],
+        ["deleted", "gone.txt", undefined],
+        ["modified", "lib.rs", "lib.rs"],
+        ["renamed", "old-name.txt", "new-name.txt"],
+      ],
+    );
+    assert.deepEqual(result.files?.find((file) => file.status === "added")?.hunks?.[0]?.rows, [
+      { kind: "added", new: { line: 1, text: "héllo" } },
+    ]);
+    const lib = result.files?.find((file) => file.new_path === "lib.rs");
+    assert.strictEqual(lib?.fallback, undefined);
+    assert.strictEqual(lib?.hunks?.[0]?.header, "total");
+    assert.deepEqual(result.omitted, [
+      {
+        status: "modified",
+        old_path: "big.txt",
+        new_path: "big.txt",
+        additions: 1,
+        deletions: 1,
+        reason: "too_large",
+      },
+    ]);
+
+    const onlyLib = yield* query.getTurnSemanticDiff({ ...range, paths: ["lib.rs"], syntax: true });
+    assert.deepEqual(
+      onlyLib.files?.map((file) => file.new_path),
+      ["lib.rs"],
+    );
+    const libRows = onlyLib.files?.[0]?.hunks?.flatMap((hunk) => hunk.rows) ?? [];
+    assert.isTrue(libRows.some((row) => (row.kind === "context" ? row.syntax : undefined)?.length));
+
+    const rename = result.files?.find((file) => file.status === "renamed");
+    const gap = rename?.gap_after ?? rename?.hunks?.[0]?.gap_before;
+    assert.isDefined(gap);
+    const expanded = yield* query.expandTurnDiffGap({
+      ...range,
+      status: "renamed",
+      old_path: "old-name.txt",
+      new_path: "new-name.txt",
+      gap: gap!,
+    });
+    assert.strictEqual(expanded.rows.length, gap!.len);
+    assert.deepEqual(expanded.rows[0], {
+      kind: "context",
+      old_line: gap!.old_start,
+      new_line: gap!.new_start,
+      text: `line ${gap!.old_start - 1} ✓`,
+    });
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);

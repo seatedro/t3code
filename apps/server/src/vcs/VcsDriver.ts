@@ -9,6 +9,7 @@ import type {
   VcsRepositoryIdentity,
 } from "@t3tools/contracts";
 import { CheckpointRef } from "@t3tools/contracts";
+import type { GitObjectRead } from "./GitObjectBatch.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
 export interface VcsCaptureCheckpointInput {
@@ -43,6 +44,15 @@ export interface VcsListAuthoredPathsInput {
   readonly toCheckpointRef: CheckpointRef;
 }
 
+export interface VcsReadObjectsInput {
+  readonly cwd: string;
+  /** `<ref>:<path>`, with the path relative to the repository root. */
+  readonly revisions: ReadonlyArray<string>;
+  readonly maxObjectBytes: number;
+  /** Shared by all revisions; later ones over it are not read. */
+  readonly maxTotalBytes: number;
+}
+
 export interface VcsDeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
@@ -63,6 +73,10 @@ export interface VcsCheckpointOps {
   readonly deleteCheckpointRefs: (
     input: VcsDeleteCheckpointRefsInput,
   ) => Effect.Effect<void, VcsError>;
+  /** One result per revision, in order. */
+  readonly readObjects: (
+    input: VcsReadObjectsInput,
+  ) => Effect.Effect<ReadonlyArray<GitObjectRead>, VcsError>;
 }
 
 export class VcsDriver extends Context.Service<

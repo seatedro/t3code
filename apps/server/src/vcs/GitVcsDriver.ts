@@ -40,6 +40,13 @@ import {
   PATCH_RENDER_PREFIX_ARGS,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
+import {
+  parseBatch,
+  parseBatchCheck,
+  planObjectReads,
+  type GitObjectInfo,
+  type GitObjectRead,
+} from "./GitObjectBatch.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -1397,6 +1404,64 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         );
       },
     ),
+
+    readObjects: Effect.fn("GitVcsDriver.checkpoints.readObjects")(function* (input) {
+      const operation = "GitVcsDriver.checkpoints.readObjects";
+      // Batch input is newline-delimited, so a revision holding one cannot be named.
+      const nameable = input.revisions.filter((revision) => !revision.includes("\n"));
+      const check =
+        nameable.length === 0
+          ? ""
+          : (yield* execute({
+              operation,
+              cwd: input.cwd,
+              args: ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+              stdin: `${nameable.join("\n")}\n`,
+            })).stdout;
+      const checked = parseBatchCheck(check, nameable.length);
+      const infoByRevision = new Map(
+        nameable.map((revision, index) => [revision, checked[index]!]),
+      );
+      const plan = planObjectReads(
+        input.revisions.map((revision) => infoByRevision.get(revision) ?? null),
+        input,
+      );
+      const wanted = plan.filter((entry): entry is GitObjectInfo => "oid" in entry);
+      const chunks: Uint8Array[] = [];
+      if (wanted.length > 0) {
+        const result = yield* vcsProcess.run({
+          operation,
+          command: "git",
+          args: ["-C", input.cwd, "cat-file", "--batch"],
+          cwd: input.cwd,
+          spawnCwd: globalThis.process.cwd(),
+          stdin: `${wanted.map((entry) => entry.oid).join("\n")}\n`,
+          onStdoutChunk: (chunk) => chunks.push(chunk),
+          // Contents arrive through onStdoutChunk as bytes; skip the decoded copy.
+          maxOutputBytes: 1,
+          outputMode: "truncate",
+          appendTruncationMarker: false,
+          allowNonZeroExit: true,
+        });
+        if (result.exitCode !== 0) {
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git cat-file",
+            cwd: input.cwd,
+            exitCode: result.exitCode,
+            detail: result.stderr.trim() || "Could not read checkpoint files.",
+          });
+        }
+      }
+      const contents = parseBatch(NodeBuffer.Buffer.concat(chunks));
+      return input.revisions.map((revision, index): GitObjectRead => {
+        if (revision.includes("\n")) return { _tag: "unreadable" };
+        const entry = plan[index]!;
+        if (!("oid" in entry)) return entry;
+        const bytes = contents.get(entry.oid);
+        return bytes === undefined ? { _tag: "unreadable" } : { _tag: "read", bytes };
+      });
+    }),
   };
 
   return {

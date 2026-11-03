@@ -38,6 +38,7 @@ describe("shouldBundleCliDependency", () => {
       "@ff-labs/fff-node",
       "@napi-rs/keyring",
       "@clerk/electron-passkeys",
+      "libdiffy",
       "node-addon-api",
     ]) {
       assert.strictEqual(shouldBundleCliDependency(id), false, id);
