@@ -27,6 +27,7 @@ import {
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { CHECKPOINT_DIFF_MAX_OUTPUT_BYTES } from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 
 /** A PR's diff in Diffy's rows, read from the project's own clone rather than the host. */
@@ -69,44 +70,55 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const diffy = yield* Diffy.Diffy;
+  const projects = yield* ProjectService.ProjectService;
 
   const failure = (message: string) => (cause: unknown) =>
     new SemanticDiffError({ message, cause });
 
-  // The PR's two commits in this clone and its files, or null when no candidate base gives the
-  // host's own files and totals: a stale clone must fall back to the host's patch, not differ.
+  // The PR's two commits and its files, from the PR's own project checkout or the one its read
+  // was routed through. Null when no candidate base gives the host's own files and totals: a
+  // stale clone must fall back to the host's patch, not differ from it.
   const openRange = Effect.fn("PullRequestSemanticDiff.openRange")(function* (
     input: PullRequestRef,
   ) {
     const detail = yield* pullRequests.detail(reference(input));
     if (detail.headSha === undefined) return null;
-    const cwd = detail.workspaceRoot;
-    const handle = yield* vcsRegistry
-      .detect({ cwd, requestedKind: "git" })
-      .pipe(Effect.mapError(failure("Could not open the project's repository.")));
-    if (handle === null) return null;
-    const candidates = yield* git
-      .listPullRequestBases({ cwd, headSha: detail.headSha, baseBranch: detail.baseBranch })
-      .pipe(Effect.mapError(failure("Could not find the PR's commits.")));
-    if (candidates === null) return null;
-    for (const mergeBase of candidates.bases) {
-      const changed = yield* git
-        .listCommitRangeFiles(cwd, mergeBase, candidates.headSha)
-        .pipe(Effect.mapError(failure("Could not list the PR's files.")));
-      const additions = changed.reduce((sum, file) => sum + file.additions, 0);
-      const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
-      if (
-        changed.length === detail.changedFiles &&
-        additions === detail.additions &&
-        deletions === detail.deletions
-      ) {
-        return {
-          cwd,
-          mergeBase,
-          headSha: candidates.headSha,
-          changed,
-          readObjects: handle.driver.checkpoints.readObjects,
-        };
+    const own = yield* projects
+      .getShell(input.projectId)
+      .pipe(Effect.mapError(failure("Could not read the project.")));
+    const roots = new Set(
+      [Option.getOrUndefined(own)?.workspaceRoot, detail.workspaceRoot].filter(
+        (root): root is string => root !== undefined,
+      ),
+    );
+    for (const cwd of roots) {
+      const handle = yield* vcsRegistry
+        .detect({ cwd, requestedKind: "git" })
+        .pipe(Effect.orElseSucceed(() => null));
+      if (handle === null) continue;
+      const candidates = yield* git
+        .listPullRequestBases({ cwd, headSha: detail.headSha, baseBranch: detail.baseBranch })
+        .pipe(Effect.orElseSucceed(() => null));
+      if (candidates === null) continue;
+      for (const mergeBase of candidates.bases) {
+        const changed = yield* git
+          .listCommitRangeFiles(cwd, mergeBase, candidates.headSha)
+          .pipe(Effect.mapError(failure("Could not list the PR's files.")));
+        const additions = changed.reduce((sum, file) => sum + file.additions, 0);
+        const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
+        if (
+          changed.length === detail.changedFiles &&
+          additions === detail.additions &&
+          deletions === detail.deletions
+        ) {
+          return {
+            cwd,
+            mergeBase,
+            headSha: candidates.headSha,
+            changed,
+            readObjects: handle.driver.checkpoints.readObjects,
+          };
+        }
       }
     }
     return null;
