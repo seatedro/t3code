@@ -76,6 +76,7 @@ import * as DocumentText from "./provider/DocumentText.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
+import * as Diffy from "./diffy/Diffy.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
@@ -621,7 +622,7 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
 );
 
 const layerOrchestrationApplication = Layer.merge(
-  CheckpointDiffQuery.layer,
+  CheckpointDiffQuery.layer.pipe(Layer.provide(Diffy.layer)),
   NativeChildWorkQuery.layer,
 ).pipe(Layer.provideMerge(layerCheckpointStore), Layer.provideMerge(layerOrchestrationV2Runtime));
 

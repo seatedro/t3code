@@ -6,6 +6,8 @@ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 export const CheckpointDiffOperation = Schema.Literals([
   "CheckpointDiffQuery.getTurnDiff",
   "CheckpointDiffQuery.getFullThreadDiff",
+  "CheckpointDiffQuery.getTurnSemanticDiff",
+  "CheckpointDiffQuery.expandTurnDiffGap",
 ]);
 export type CheckpointDiffOperation = typeof CheckpointDiffOperation.Type;
 
@@ -18,7 +20,7 @@ export class CheckpointDiffResultInvalidError extends Schema.TaggedError<Checkpo
 ) {
   override get message(): string {
     const result =
-      this.operation === "CheckpointDiffQuery.getTurnDiff" ? "turn diff" : "full thread diff";
+      this.operation === "CheckpointDiffQuery.getFullThreadDiff" ? "full thread diff" : "turn diff";
     return `Checkpoint invariant violation in ${this.operation}: Computed ${result} result does not satisfy contract schema.`;
   }
 }
@@ -44,7 +46,7 @@ export class CheckpointWorkspacePathMissingError extends Schema.TaggedError<Chec
 ) {
   override get message(): string {
     const diff =
-      this.operation === "CheckpointDiffQuery.getTurnDiff" ? "turn diff" : "full thread diff";
+      this.operation === "CheckpointDiffQuery.getFullThreadDiff" ? "full thread diff" : "turn diff";
     return `Checkpoint invariant violation in ${this.operation}: Workspace path missing for thread '${this.threadId}' when computing ${diff}.`;
   }
 }
