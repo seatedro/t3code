@@ -190,6 +190,8 @@ type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "act
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
 
+const isGitCommandError = Schema.is(GitCommandError);
+
 function isNotGitRepositoryError(error: GitCommandError): boolean {
   return error.message.toLowerCase().includes("not a git repository");
 }
@@ -3315,7 +3317,8 @@ export const make = Effect.gen(function* () {
             progress.emit({
               kind: "action_failed",
               phase: Option.getOrNull(phase),
-              message: error.message,
+              // Clients show this; the operation name and checkout path stay in logs.
+              message: isGitCommandError(error) ? error.detail : error.message,
             }),
           ),
         ),
