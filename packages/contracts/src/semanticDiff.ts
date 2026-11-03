@@ -123,6 +123,7 @@ export const SemanticDiffFile = Schema.Struct({
   new_path: Schema.optionalKey(Schema.String),
   language: Schema.optionalKey(Schema.String),
   binary: Schema.optionalKey(Schema.Boolean),
+  /** Git's line counts, as in the turn's summary; the rows are Diffy's. */
   additions: Schema.Number,
   deletions: Schema.Number,
   old_missing_newline: Schema.optionalKey(Schema.Boolean),

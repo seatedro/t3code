@@ -367,6 +367,10 @@ it.effect("diffs a turn semantically from real checkpoint contents", () =>
     yield* write("gone.txt", "bye\n");
     yield* write("old-name.txt", renamed);
     yield* write("big.txt", "small\n");
+    yield* write(
+      "pipe.ts",
+      "function f(hash: string) {\n  return parse(\n    Result.getOrThrow(decode(hash.slice(1))),\n  );\n}\n",
+    );
     yield* git(["add", "."]);
     yield* git(["commit", "-m", "initial"]);
 
@@ -383,6 +387,11 @@ it.effect("diffs a turn semantically from real checkpoint contents", () =>
     yield* fs.rename(path.join(cwd, "old-name.txt"), path.join(cwd, "new-name.txt"));
     yield* write("added.txt", "héllo\n");
     yield* write("big.txt", "x".repeat(1_100_000));
+    // Diffy aligns this refactor differently from git: it counts +6 -3 where git counts +5 -2.
+    yield* write(
+      "pipe.ts",
+      "function f(hash: string) {\n  return pipe(\n    hash.slice(1),\n    decode,\n    Result.getOrThrow,\n    parse,\n  );\n}\n",
+    );
     yield* store.captureCheckpoint({ cwd, checkpointRef: toCheckpointRef });
 
     const query = yield* CheckpointDiffQuery.make.pipe(
@@ -416,8 +425,12 @@ it.effect("diffs a turn semantically from real checkpoint contents", () =>
         ["deleted", "gone.txt", undefined],
         ["modified", "lib.rs", "lib.rs"],
         ["renamed", "old-name.txt", "new-name.txt"],
+        ["modified", "pipe.ts", "pipe.ts"],
       ],
     );
+    // Counts match git's, as the turn summary does.
+    const pipe = result.files?.find((file) => file.new_path === "pipe.ts");
+    assert.deepEqual([pipe?.additions, pipe?.deletions], [5, 2]);
     assert.deepEqual(result.files?.find((file) => file.status === "added")?.hunks?.[0]?.rows, [
       { kind: "added", new: { line: 1, text: "héllo" } },
     ]);

@@ -393,6 +393,7 @@ export const make = Effect.gen(function* () {
     });
 
     const inputs: DiffyFileInput[] = [];
+    const counted: TurnDiffFileSummary[] = [];
     const omitted: SemanticDiffOmittedFile[] = [];
     retainedFiles.forEach((file, index) => {
       const before = reads[index * 2]!;
@@ -422,6 +423,7 @@ export const make = Effect.gen(function* () {
         });
         return;
       }
+      counted.push(file);
       inputs.push({
         status,
         ...paths,
@@ -431,7 +433,20 @@ export const make = Effect.gen(function* () {
     });
 
     const files = yield* diffy.diff(inputs, { syntax: input.syntax ?? false });
-    return { ...range, files: Option.getOrNull(files), omitted };
+    return {
+      ...range,
+      // Git's counts, so a file reads the same here as in the turn's summary.
+      files: Option.getOrNull(
+        Option.map(files, (diffed) =>
+          diffed.map((file, index) => ({
+            ...file,
+            additions: counted[index]!.additions,
+            deletions: counted[index]!.deletions,
+          })),
+        ),
+      ),
+      omitted,
+    };
   });
 
   const expandTurnDiffGap: CheckpointDiffQuery["Service"]["expandTurnDiffGap"] = Effect.fn(
