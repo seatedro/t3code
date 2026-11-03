@@ -184,6 +184,17 @@ describe("resolveThreadCurrentPullRequest", () => {
     }
   });
 
+  it("puts the top ready layer on top, not a draft stacked above it", () => {
+    const current = resolveThreadCurrentPullRequest([
+      link(1, { snapshot: snapshot({ headBranch: "a", baseBranch: "main" }) }),
+      link(2, { snapshot: snapshot({ headBranch: "b", baseBranch: "a", isDraft: true }) }),
+    ]);
+    expect(current).toMatchObject({ kind: "stack", top: { number: 1 } });
+    if (current?.kind === "stack") {
+      expect(current.open.map((entry) => entry.number)).toEqual([2, 1]);
+    }
+  });
+
   it("orders an open set without stack data by most recent link", () => {
     const current = resolveThreadCurrentPullRequest([link(1), link(2)]);
     expect(current).toMatchObject({ kind: "stack", top: { number: 2 } });
