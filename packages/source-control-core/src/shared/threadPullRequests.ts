@@ -162,7 +162,9 @@ export function makeThreadPullRequests(
               }))
               .sort((left, right) => right.newestLinkedAt - left.newestLinkedAt)
               .flatMap((chain) => chain.layers);
-      return { kind: "stack", open: ordered, top: ordered[0]! };
+      // A draft stacked on a ready PR is still being written; the ready one is what's in review.
+      const top = ordered.find((link) => link.snapshot?.isDraft !== true) ?? ordered[0]!;
+      return { kind: "stack", open: ordered, top };
     }
     if (chains.length === 1) {
       return { kind: "single", link: layersFromTop(chains[0]!)[0]! };
