@@ -16,7 +16,7 @@ import * as PullRequestService from "./PullRequestService.ts";
 
 const reference = { projectId: ProjectId.make("project"), repository: "o/r", number: 7 };
 
-it.effect("diffs a PR from the clone only when its files match the host's", () =>
+it.effect("diffs a PR from the clone, open or merged, only when its files match the host's", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const cwd = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-diff-" }));
@@ -78,8 +78,17 @@ it.effect("diffs a PR from the clone only when its files match the host's", () =
       // The host counts other files, say for a base branch this clone hasn't fetched.
       detail = { ...detail, changedFiles: 3 };
       assert.isNull((yield* prs.diff(reference)).files);
+      // Merged with a merge commit: the head is in main, so its changes start at the merge's
+      // first parent, not where the head now meets main.
+      detail = { ...detail, changedFiles: 2 };
+      yield* git(["merge", "--no-ff", "--no-edit", "feature"]);
+      assert.deepStrictEqual(
+        (yield* prs.diff(reference)).files?.map((file) => file.new_path),
+        ["a.js", "b.js"],
+      );
+
       // The head commit isn't in this clone.
-      detail = { ...detail, changedFiles: 2, headSha: "0".repeat(40) };
+      detail = { ...detail, headSha: "0".repeat(40) };
       assert.isNull((yield* prs.diff(reference)).files);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(NodeServices.layer)),
