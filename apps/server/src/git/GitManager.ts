@@ -25,6 +25,8 @@ import {
   GitCommandError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  GitPreviewChangeRequestResult,
+  GIT_PREVIEW_MAX_COMMITS,
   GitPullRequestRefInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
@@ -145,6 +147,10 @@ export class GitManager extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    /** The base Open PR would use and the commits it would carry, without opening anything. */
+    readonly previewChangeRequest: (
+      input: VcsStatusInput,
+    ) => Effect.Effect<GitPreviewChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -3336,6 +3342,29 @@ export const make = Effect.gen(function* () {
     asUserAction,
   );
 
+  const previewChangeRequest: GitManager["Service"]["previewChangeRequest"] = Effect.fn(
+    "GitManager.previewChangeRequest",
+  )(function* (input) {
+    const details = yield* gitCore.statusDetails(input.cwd);
+    if (!details.branch) return { baseBranch: null, commits: [] };
+    const headContext = yield* resolveBranchHeadContext(input.cwd, {
+      branch: details.branch,
+      upstreamRef: details.upstreamRef,
+    });
+    const { baseBranch, baseRef } = yield* resolvePrBase(
+      input.cwd,
+      details.branch,
+      details.upstreamRef,
+      headContext,
+    );
+    const commits = yield* gitCore.readCommitSubjects(
+      input.cwd,
+      yield* resolveBaseRangeRef(input.cwd, baseRef),
+      GIT_PREVIEW_MAX_COMMITS,
+    );
+    return { baseBranch, commits };
+  });
+
   return GitManager.of({
     createWorktree,
     localStatus,
@@ -3346,6 +3375,7 @@ export const make = Effect.gen(function* () {
     invalidateRemoteStatus,
     invalidateStatus,
     resolvePullRequest,
+    previewChangeRequest,
     preparePullRequestThread,
     runStackedAction,
     subscribePullRequestStateChanges: PubSub.subscribe(pullRequestStateChanges).pipe(

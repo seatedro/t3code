@@ -2951,6 +2951,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
+  const readCommitSubjects: GitVcsDriver.GitVcsDriver["Service"]["readCommitSubjects"] = Effect.fn(
+    "readCommitSubjects",
+  )(function* (cwd, baseRef, limit) {
+    const stdout = yield* runGitStdout("GitVcsDriver.readCommitSubjects", cwd, [
+      "log",
+      `--max-count=${limit}`,
+      "--format=%H%x1f%s%x1e",
+      "--end-of-options",
+      `${baseRef}..HEAD`,
+    ]);
+    return stdout
+      .split("\x1e")
+      .map((record) => record.trim())
+      .filter((record) => record.length > 0)
+      .map((record) => {
+        const [sha = "", subject = ""] = record.split("\x1f");
+        return { sha, subject };
+      });
+  });
+
   const readRangeContext: GitVcsDriver.GitVcsDriver["Service"]["readRangeContext"] = Effect.fn(
     "readRangeContext",
   )(function* (cwd, baseRef) {
@@ -5165,6 +5185,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }),
     readRangeContext,
     getReviewBranchCommits,
+    readCommitSubjects,
     getReviewDiffPreview,
     getReviewDiffFileContents,
     listBranchReviewFiles,
