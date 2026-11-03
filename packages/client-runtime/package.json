@@ -39,6 +39,10 @@
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"
     },
+    "./diff-fuse": {
+      "types": "./src/diffFuse.ts",
+      "default": "./src/diffFuse.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
