@@ -3328,34 +3328,46 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     to,
   ) => readReviewNumstat(cwd, [from, to]);
 
-  const resolvePullRequestBase: GitVcsDriver.GitVcsDriver["Service"]["resolvePullRequestBase"] =
-    Effect.fn("GitVcsDriver.resolvePullRequestBase")(function* (input) {
-      const head = yield* executeGit(
-        "GitVcsDriver.resolvePullRequestBase.head",
-        input.cwd,
-        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.headSha}^{commit}`],
-        { allowNonZeroExit: true },
-      );
-      const headSha = head.stdout.trim();
-      if (head.exitCode !== 0 || headSha.length === 0) return null;
+  const listPullRequestBases: GitVcsDriver.GitVcsDriver["Service"]["listPullRequestBases"] =
+    Effect.fn("GitVcsDriver.listPullRequestBases")(function* (input) {
+      const git = (args: ReadonlyArray<string>) =>
+        executeGit("GitVcsDriver.listPullRequestBases", input.cwd, args, {
+          allowNonZeroExit: true,
+        }).pipe(Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : "")));
+      const headSha = yield* git([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        `${input.headSha}^{commit}`,
+      ]);
+      if (headSha.length === 0) return null;
       const remote = yield* resolvePrimaryRemoteName(input.cwd).pipe(
         Effect.orElseSucceed(() => null),
       );
-      const candidates = [
+      const bases: string[] = [];
+      for (const ref of [
         ...(remote === null ? [] : [`refs/remotes/${remote}/${input.baseBranch}`]),
         `refs/heads/${input.baseBranch}`,
-      ];
-      for (const candidate of candidates) {
-        const result = yield* executeGit(
-          "GitVcsDriver.resolvePullRequestBase.mergeBase",
-          input.cwd,
-          ["merge-base", "--end-of-options", candidate, headSha],
-          { allowNonZeroExit: true },
-        );
-        const mergeBase = result.stdout.trim();
-        if (result.exitCode === 0 && mergeBase.length > 0) return { mergeBase, headSha };
+      ]) {
+        const forkPoint = yield* git(["merge-base", "--end-of-options", ref, headSha]);
+        if (forkPoint.length > 0 && forkPoint !== headSha) bases.push(forkPoint);
+        // Once merged with a merge commit, the head is in the base; its changes start where
+        // the merge commit's first parent last met the head.
+        const merge = (yield* git([
+          "rev-list",
+          "--ancestry-path",
+          "--merges",
+          "--reverse",
+          "--end-of-options",
+          `${headSha}..${ref}`,
+        ])).split("\n")[0];
+        if (merge !== undefined && merge.length > 0) {
+          const before = yield* git(["merge-base", "--end-of-options", `${merge}^1`, headSha]);
+          if (before.length > 0 && before !== headSha) bases.push(before);
+        }
       }
-      return null;
+      return { headSha, bases: [...new Set(bases)] };
     });
 
   const reviewDiffFileError = (
@@ -4739,7 +4751,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     listBranchReviewFiles,
     listCommitRangeFiles,
-    resolvePullRequestBase,
+    listPullRequestBases,
     readConfigValue,
     readBranchBase,
     resolveBranchName,

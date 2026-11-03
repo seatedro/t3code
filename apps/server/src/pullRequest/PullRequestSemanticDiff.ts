@@ -73,7 +73,8 @@ export const make = Effect.gen(function* () {
   const failure = (message: string) => (cause: unknown) =>
     new SemanticDiffError({ message, cause });
 
-  // The PR's two commits in this clone, or null when its head isn't here.
+  // The PR's two commits in this clone and its files, or null when no candidate base gives the
+  // host's own files and totals: a stale clone must fall back to the host's patch, not differ.
   const openRange = Effect.fn("PullRequestSemanticDiff.openRange")(function* (
     input: PullRequestRef,
   ) {
@@ -84,11 +85,31 @@ export const make = Effect.gen(function* () {
       .detect({ cwd, requestedKind: "git" })
       .pipe(Effect.mapError(failure("Could not open the project's repository.")));
     if (handle === null) return null;
-    const range = yield* git
-      .resolvePullRequestBase({ cwd, headSha: detail.headSha, baseBranch: detail.baseBranch })
+    const candidates = yield* git
+      .listPullRequestBases({ cwd, headSha: detail.headSha, baseBranch: detail.baseBranch })
       .pipe(Effect.mapError(failure("Could not find the PR's commits.")));
-    if (range === null) return null;
-    return { detail, cwd, ...range, readObjects: handle.driver.checkpoints.readObjects };
+    if (candidates === null) return null;
+    for (const mergeBase of candidates.bases) {
+      const changed = yield* git
+        .listCommitRangeFiles(cwd, mergeBase, candidates.headSha)
+        .pipe(Effect.mapError(failure("Could not list the PR's files.")));
+      const additions = changed.reduce((sum, file) => sum + file.additions, 0);
+      const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
+      if (
+        changed.length === detail.changedFiles &&
+        additions === detail.additions &&
+        deletions === detail.deletions
+      ) {
+        return {
+          cwd,
+          mergeBase,
+          headSha: candidates.headSha,
+          changed,
+          readObjects: handle.driver.checkpoints.readObjects,
+        };
+      }
+    }
+    return null;
   });
 
   const diff: PullRequestSemanticDiff["Service"]["diff"] = Effect.fn(
@@ -97,26 +118,8 @@ export const make = Effect.gen(function* () {
     if (!(yield* diffy.available)) return { files: null, omitted: [] };
     const range = yield* openRange(input);
     if (range === null) return { files: null, omitted: [] };
-    const changed = yield* git
-      .listCommitRangeFiles(range.cwd, range.mergeBase, range.headSha)
-      .pipe(Effect.mapError(failure("Could not list the PR's files.")));
-    // A stale base branch here, or a PR merged since, gives other files than the host's diff.
-    const totals = changed.reduce(
-      (sum, file) => ({
-        additions: sum.additions + file.additions,
-        deletions: sum.deletions + file.deletions,
-      }),
-      { additions: 0, deletions: 0 },
-    );
-    if (
-      changed.length !== range.detail.changedFiles ||
-      totals.additions !== range.detail.additions ||
-      totals.deletions !== range.detail.deletions
-    ) {
-      return { files: null, omitted: [] };
-    }
     const files = filterPaths(
-      changed.map((file) => ({
+      range.changed.map((file) => ({
         path: file.path,
         previousPath: file.previousPath ?? undefined,
         additions: file.additions,

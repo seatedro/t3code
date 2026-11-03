@@ -370,15 +370,16 @@ export class GitVcsDriver extends Context.Service<
       to: string,
     ) => Effect.Effect<ReadonlyArray<ReviewDiffFileStat>, GitCommandError>;
     /**
-     * Where a PR's changes start, from this clone: the merge base of its head and its base
-     * branch. Null when the head commit isn't here or shares no history with the base.
+     * Where a PR's changes could start, from this clone, likeliest first: where its head left
+     * the base branch, or for a merged PR where its merge commit's first parent met the head.
+     * Null when the head commit isn't here. The caller checks a candidate against the host.
      */
-    readonly resolvePullRequestBase: (input: {
+    readonly listPullRequestBases: (input: {
       readonly cwd: string;
       readonly headSha: string;
       readonly baseBranch: string;
     }) => Effect.Effect<
-      { readonly mergeBase: string; readonly headSha: string } | null,
+      { readonly headSha: string; readonly bases: ReadonlyArray<string> } | null,
       GitCommandError
     >;
     readonly readConfigValue: (
