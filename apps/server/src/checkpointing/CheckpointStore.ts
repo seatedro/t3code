@@ -4,7 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import type { CheckpointStoreError } from "./Errors.ts";
-import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
+import type { GitObjectRead } from "../vcs/GitObjectBatch.ts";
+import type { VcsCheckpointOps, VcsReadObjectsInput } from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 export interface CaptureCheckpointInput {
@@ -71,6 +72,10 @@ export class CheckpointStore extends Context.Service<
     readonly deleteCheckpointRefs: (
       input: DeleteCheckpointRefsInput,
     ) => Effect.Effect<void, CheckpointStoreError>;
+
+    readonly readObjects: (
+      input: VcsReadObjectsInput,
+    ) => Effect.Effect<ReadonlyArray<GitObjectRead>, CheckpointStoreError>;
   }
 >()("t3/checkpointing/CheckpointStore") {}
 
@@ -132,12 +137,20 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.deleteCheckpointRefs(input);
   });
 
+  const readObjects: CheckpointStore["Service"]["readObjects"] = Effect.fn("readObjects")(
+    function* (input) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.readObjects(input);
+    },
+  );
+
   return CheckpointStore.of({
     isGitRepository,
     captureCheckpoint,
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    readObjects,
     listAuthoredPaths,
     deleteCheckpointRefs,
   });

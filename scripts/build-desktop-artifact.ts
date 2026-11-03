@@ -227,8 +227,8 @@ export class MacPasskeySigningConfigurationResolutionError extends Schema.Tagged
   }
 }
 
-export class KeyringNativePackageMissingError extends Schema.TaggedError<KeyringNativePackageMissingError>()(
-  "KeyringNativePackageMissingError",
+export class NativePackageMissingError extends Schema.TaggedError<NativePackageMissingError>()(
+  "NativePackageMissingError",
   {
     packageName: Schema.String,
     binaryFileName: Schema.String,
@@ -239,7 +239,7 @@ export class KeyringNativePackageMissingError extends Schema.TaggedError<Keyring
   },
 ) {
   override get message(): string {
-    return `Keyring native package is missing: ${this.packageName}`;
+    return `Native package is missing: ${this.packageName}`;
   }
 }
 
@@ -1515,25 +1515,41 @@ export function resolveKeyringNativeArtifacts(
   }));
 }
 
-/** electron-builder omits pnpm-nested platform packages; stage keyring's binary beside its loader, which checks there first. */
-const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(function* (
+/** libdiffy has no Windows binary yet; the server falls back to patches there. */
+export function resolveLibdiffyNativeArtifacts(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): readonly ClerkPasskeyNativeArtifact[] {
+  if (platform === "win") return [];
+  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
+  return architectures.map((architecture) => {
+    const name = platform === "mac" ? `darwin-${architecture}` : `linux-${architecture}-gnu`;
+    return { packageName: `libdiffy-${name}`, binaryFileName: `diffy.${name}.node` };
+  });
+}
+
+/** electron-builder omits pnpm-nested platform packages; stage binaries beside loaders that check there first. */
+const stageNativeBinariesBesideLoader = Effect.fn("stageNativeBinariesBesideLoader")(function* (
   stageAppDir: string,
+  loaderPath: ReadonlyArray<string>,
+  artifacts: readonly ClerkPasskeyNativeArtifact[],
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
 ) {
+  if (artifacts.length === 0) return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const packageEntryPath = yield* fs.realPath(
-    path.join(stageAppDir, "node_modules", "@napi-rs", "keyring", "index.js"),
+    path.join(stageAppDir, "node_modules", ...loaderPath),
   );
   const packageDir = path.dirname(packageEntryPath);
   const packageRequire = NodeModule.createRequire(packageEntryPath);
 
-  for (const artifact of resolveKeyringNativeArtifacts(platform, arch)) {
+  for (const artifact of artifacts) {
     const sourcePath = yield* Effect.try({
       try: () => packageRequire.resolve(`${artifact.packageName}/${artifact.binaryFileName}`),
       catch: (cause) =>
-        new KeyringNativePackageMissingError({
+        new NativePackageMissingError({
           packageName: artifact.packageName,
           binaryFileName: artifact.binaryFileName,
           packageEntryPath,
@@ -3934,7 +3950,20 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     { label: "vp install --prod", verbose: options.verbose },
   );
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
-  yield* stageKeyringNativeBinaries(stageAppDir, options.platform, options.arch);
+  yield* stageNativeBinariesBesideLoader(
+    stageAppDir,
+    ["@napi-rs", "keyring", "index.js"],
+    resolveKeyringNativeArtifacts(options.platform, options.arch),
+    options.platform,
+    options.arch,
+  );
+  yield* stageNativeBinariesBesideLoader(
+    stageAppDir,
+    ["libdiffy", "binding.js"],
+    resolveLibdiffyNativeArtifacts(options.platform, options.arch),
+    options.platform,
+    options.arch,
+  );
 
   if (options.platform === "win" && windowsServerAsarPath) {
     yield* stageWindowsServerSidecar({
