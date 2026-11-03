@@ -8,6 +8,7 @@ export const CheckpointDiffOperation = Schema.Literals([
   "CheckpointDiffQuery.getFullThreadDiff",
   "CheckpointDiffQuery.getTurnSemanticDiff",
   "CheckpointDiffQuery.expandTurnDiffGap",
+  "CheckpointDiffQuery.getTurnDiffImage",
 ]);
 export type CheckpointDiffOperation = typeof CheckpointDiffOperation.Type;
 

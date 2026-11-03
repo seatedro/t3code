@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,7 +13,9 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
+import * as Diffy from "../diffy/Diffy.ts";
 import * as ReviewService from "./ReviewService.ts";
 
 function layer(input: {
@@ -27,6 +30,7 @@ function layer(input: {
 }) {
   const projectRoots = input.projectRoots ?? [];
   return ReviewService.layer.pipe(
+    Layer.provide(Diffy.layer),
     Layer.provide(KnownWorkspaces.layer),
     Layer.provide(
       Layer.effectDiscard(
@@ -260,3 +264,105 @@ describe("ReviewService", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+const layerRealGit = (workspaceRoot: string, baseDir: string) =>
+  ReviewService.layer.pipe(
+    Layer.provide(Diffy.layer),
+    Layer.provide(
+      Layer.mock(KnownWorkspaces.KnownWorkspaces)({ contains: () => Effect.succeed(false) }),
+    ),
+    Layer.provideMerge(GitVcsDriver.layer),
+    Layer.provideMerge(VcsDriverRegistry.layer),
+    Layer.provideMerge(VcsProcess.layer),
+    Layer.provideMerge(ServerConfig.layerTest(workspaceRoot, baseDir)),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );
+
+it.effect("diffs a branch semantically against its base, untracked files included", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const workspaceRoot = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-semantic-" }),
+    );
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+    const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
+    const cwd = `${workspaceRoot}/repo`;
+    yield* fs.makeDirectory(cwd);
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2]);
+
+    yield* Effect.gen(function* () {
+      const process = yield* VcsProcess.VcsProcess;
+      const git = (args: ReadonlyArray<string>) =>
+        process.run({ operation: "ReviewService.test.git", command: "git", cwd, args });
+      const write = (file: string, contents: string) =>
+        fs.writeFileString(`${cwd}/${file}`, contents);
+      const lines = Array.from({ length: 30 }, (_, line) => `const v${line} = ${line};\n`).join("");
+      yield* git(["init", "-b", "main"]);
+      yield* git(["config", "user.email", "test@test.com"]);
+      yield* git(["config", "user.name", "Test"]);
+      yield* write("a.ts", lines);
+      yield* write("old.txt", "kept\n".repeat(20));
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "base"]);
+      yield* git(["checkout", "-b", "feature"]);
+      yield* git(["mv", "old.txt", "new.txt"]);
+      yield* git(["commit", "-m", "rename"]);
+      // Uncommitted edits and untracked files belong to the branch, as review compares it.
+      yield* write("a.ts", lines.replace("const v20 = 20;", "const v20 = 21;"));
+      yield* write("u.ts", "export const fresh = true;\n");
+      yield* fs.writeFile(`${cwd}/shot.png`, png);
+      yield* fs.writeFileString(`${outside}/secret.txt`, "outside\n");
+      yield* fs.symlink(`${outside}/secret.txt`, `${cwd}/escape.txt`);
+
+      const review = yield* ReviewService.ReviewService;
+      const result = yield* review.getSemanticDiff({ cwd, baseRef: "main" });
+      assert.strictEqual(result.baseRef, "main");
+      const byPath = new Map(
+        (result.files ?? []).map((file) => [file.new_path ?? file.old_path, file]),
+      );
+      assert.deepStrictEqual([...byPath.keys()].toSorted(), [
+        "a.ts",
+        "new.txt",
+        "shot.png",
+        "u.ts",
+      ]);
+      const edited = byPath.get("a.ts")!;
+      assert.strictEqual(edited.status, "modified");
+      assert.deepStrictEqual([edited.additions, edited.deletions], [1, 1]);
+      assert.strictEqual(byPath.get("new.txt")?.status, "renamed");
+      assert.strictEqual(byPath.get("new.txt")?.old_path, "old.txt");
+      assert.strictEqual(byPath.get("u.ts")?.status, "added");
+      // A symlink pointing out of the checkout is never read.
+      assert.deepStrictEqual(
+        result.omitted.map((file) => [file.new_path, file.reason]),
+        [["escape.txt", "unreadable"]],
+      );
+
+      const gap = edited.hunks?.[0]?.gap_before;
+      assert.isDefined(gap);
+      const expanded = yield* review.expandDiffGap({
+        cwd,
+        baseRef: "main",
+        status: "modified",
+        old_path: "a.ts",
+        new_path: "a.ts",
+        gap: gap!,
+      });
+      assert.strictEqual(expanded.rows.length, gap!.len);
+
+      const image = yield* review.getDiffImage({
+        cwd,
+        baseRef: "main",
+        side: "new",
+        path: "shot.png",
+      });
+      assert.deepStrictEqual(image.image, {
+        mime: "image/png",
+        base64: Buffer.from(png).toString("base64"),
+        bytes: png.byteLength,
+      });
+      const text = yield* review.getDiffImage({ cwd, baseRef: "main", side: "new", path: "u.ts" });
+      assert.isNull(text.image);
+    }).pipe(Effect.provide(layerRealGit(workspaceRoot, baseDir)));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
