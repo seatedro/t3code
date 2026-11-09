@@ -26,6 +26,7 @@ import type {
   ScheduledTaskWebhookDeliverySummary,
   ThreadId,
 } from "@t3tools/contracts";
+import { scheduleLabel, WEEKDAY_LABELS } from "@t3tools/client-runtime/scheduled-tasks";
 import {
   DEFAULT_WEBHOOK_PROMPT,
   emptyWebhookFilterDraft,
@@ -104,9 +105,7 @@ import {
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
   scheduleFromDraft,
-  scheduleLabel,
   scheduledTaskDefaultModel,
-  WEEKDAY_LABELS,
   taskToDraft,
   unbindDraftFromThread,
   type DraftState,

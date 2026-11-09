@@ -8,14 +8,18 @@ import { findRevealRef } from "./markdownFindContext";
 import {
   type EnvironmentId,
   type MessageId,
+  type ScheduledTask,
   type ScheduledTaskId,
   type ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  automationRunHistory,
+  resolveUserMessagePresentation,
+} from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
-import { useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -85,6 +89,8 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { WorkflowOpeningBlock } from "./WorkflowOpeningBlock";
 import { useTallEnoughToFold } from "./useTallEnoughToFold";
+import { scheduleLabel } from "@t3tools/client-runtime/scheduled-tasks";
+import { TRIGGER_CARD_CLASS_NAME, TriggerCardHeader } from "./TimelineTriggerCard";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import {
   MESSAGE_HEADING_LEVEL,
@@ -282,16 +288,31 @@ function UserMessageContent({ row }: { row: Extract<TimelineRow, { kind: "messag
   );
 }
 
-/** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
+/** Automation prompts are long, repeated runbooks; a folded card keeps them out of the way. */
 function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
   const revealRef = findRevealRef(() => setExpanded(true));
   const { text, scheduledTaskId } = resolveUserMessagePresentation(row.message);
-  const summary =
-    useScheduledTaskTitle(ctx.activeThreadEnvironmentId, scheduledTaskId) ??
-    text.trim().split(/\r?\n/, 1)[0] ??
-    "";
+  const task = useScheduledTask(ctx.activeThreadEnvironmentId, scheduledTaskId);
+  const thread = useQuietThreadProjection(ctx.threadRef);
+  const history = thread === null ? null : automationRunHistory(thread.projection, row.message.id);
+  const title = task?.title ?? text.trim().split(/\r?\n/, 1)[0] ?? "";
+  const next =
+    task === undefined || history?.latest !== true
+      ? null
+      : !task.enabled
+        ? "Paused"
+        : task.nextRunAt === null
+          ? null
+          : `Next ${formatDayAwareTimestamp(task.nextRunAt, ctx.timestampFormat)}`;
+  const detail = [
+    task === undefined ? null : scheduleLabel(task.schedule),
+    formatDayAwareTimestamp(row.message.createdAt, ctx.timestampFormat),
+    next,
+  ]
+    .filter((part) => part !== null && part.length > 0)
+    .join(" · ");
 
   const revertTurnCount = row.revertTurnCount;
   const promptLink = promptLinkFor(text);
@@ -299,7 +320,10 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const bodyMounted = expanded || ctx.findActive;
 
   return (
-    <div className="group flex flex-col items-end gap-1" data-user-message-attribution="automation">
+    <div
+      className="group flex flex-col items-start gap-1"
+      data-user-message-attribution="automation"
+    >
       {row.message.inputIntent === "steer" ||
       row.message.inputIntent === "promoted_queued_to_steer" ? (
         <UserMessageIntentMarker
@@ -307,19 +331,15 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           unread={row.projectedItem?.item.status === "pending"}
         />
       ) : null}
-      <div
-        className={cn(
-          "min-w-0 max-w-[80%] rounded-2xl bg-message text-message-foreground",
-          BUBBLE_CHIP_CLASS_NAME,
-          expanded && "w-full",
-        )}
-        data-user-message-bubble=""
-      >
+      <div className={cn(TRIGGER_CARD_CLASS_NAME, expanded && "max-w-none")}>
         <MessageAuthorHeading>Automation</MessageAuthorHeading>
-        <FoldedMessageHeader
+        <TriggerCardHeader
           icon={CalendarClockIcon}
-          label="Automation"
-          summary={summary}
+          kind="Automation"
+          tone="automation"
+          title={title}
+          detail={detail}
+          marks={history?.marks}
           expanded={expanded}
           onToggle={() => setExpanded((value) => !value)}
         />
@@ -337,7 +357,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       </div>
       <UserMessageProjectedStatus row={row} />
       {expanded ? (
-        <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
+        <div className="flex w-full items-center ps-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
           <div className="flex shrink-0 items-center gap-2">
             {scheduledTaskId ? (
               <Link
@@ -374,14 +394,21 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   );
 }
 
+function useScheduledTask(
+  environmentId: EnvironmentId,
+  scheduledTaskId: ScheduledTaskId | undefined,
+): ScheduledTask | undefined {
+  const tasksQuery = useEnvironmentQuery(
+    scheduledTaskId ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
+  );
+  return tasksQuery.data?.tasks.find((task) => task.id === scheduledTaskId);
+}
+
 export function useScheduledTaskTitle(
   environmentId: EnvironmentId,
   scheduledTaskId: ScheduledTaskId | undefined,
 ): string | undefined {
-  const tasksQuery = useEnvironmentQuery(
-    scheduledTaskId ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
-  );
-  return tasksQuery.data?.tasks.find((task) => task.id === scheduledTaskId)?.title;
+  return useScheduledTask(environmentId, scheduledTaskId)?.title;
 }
 
 export function FoldedMessageHeader(props: {
@@ -845,7 +872,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   return (
     <div
-      className="group @container flex flex-col items-end gap-1"
+      className={cn("group @container flex flex-col gap-1", folded ? "items-start" : "items-end")}
       data-user-message-attribution={folded ? "agent" : undefined}
     >
       {userMessage.attribution === "t3code" ? (
@@ -879,17 +906,21 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ) : null}
       <div
         className={cn(
-          "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
-          (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",
-          row.groupedWithNext && "rounded-br-md",
-          BUBBLE_CHIP_CLASS_NAME,
-          userMessage.attribution === "guest"
-            ? guestBubbleClassName(false)
-            : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
-          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
-          folded && expanded && "w-full",
+          "relative",
+          folded
+            ? cn(TRIGGER_CARD_CLASS_NAME, expanded && "max-w-none")
+            : cn(
+                "min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
+                (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",
+                row.groupedWithNext && "rounded-br-md",
+                BUBBLE_CHIP_CLASS_NAME,
+                userMessage.attribution === "guest"
+                  ? guestBubbleClassName(false)
+                  : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
+                !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
+              ),
         )}
-        data-user-message-bubble=""
+        data-user-message-bubble={folded ? undefined : ""}
       >
         {/* Outside the fold so a collapsed message still has a heading to navigate to. */}
         {mediaAboveText ? null : (
@@ -902,10 +933,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </MessageAuthorHeading>
         )}
         {folded ? (
-          <FoldedMessageHeader
+          <TriggerCardHeader
             icon={MessagesSquareIcon}
-            label={senderLabel}
-            summary={foldSummary}
+            tone="agent"
+            title={senderLabel}
+            detail={foldSummary}
             expanded={expanded}
             onToggle={() => setExpanded((value) => !value)}
           />
@@ -1055,7 +1087,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {!folded || expanded ? (
         <div
           className={cn(
-            "flex w-full max-w-[80%] justify-end pe-1",
+            "flex w-full",
+            folded ? "justify-start ps-1" : "max-w-[80%] justify-end pe-1",
             floatActions && "@min-[37rem]:hidden",
             ACTIONS_REVEAL_CLASS_NAME,
           )}

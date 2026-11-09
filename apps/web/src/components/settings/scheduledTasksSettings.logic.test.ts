@@ -8,6 +8,7 @@ import {
   type ScheduledTask,
   ThreadId,
 } from "@t3tools/contracts";
+import { scheduleLabel } from "@t3tools/client-runtime/scheduled-tasks";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type {
@@ -22,7 +23,6 @@ import {
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
   scheduleFromDraft,
-  scheduleLabel,
   taskToDraft,
   unbindDraftFromThread,
 } from "./scheduledTasksSettings.logic";
