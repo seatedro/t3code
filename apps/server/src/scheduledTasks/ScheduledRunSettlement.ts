@@ -1,5 +1,6 @@
 import { CommandId, type RunId, type ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Cause from "effect/Cause";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +24,8 @@ const ENDED_RUN_STATUSES = new Set([
 interface PendingRun {
   readonly runId: RunId;
   confirmed: boolean;
+  heldByBackgroundWork: boolean;
+  backgroundWorkCancelled: boolean;
 }
 
 /**
@@ -37,6 +40,9 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   // Set when the event arrives so later events for the thread retry until it can settle.
   const pending = new Map<ThreadId, PendingRun>();
+  // Awaited work that finishes wakes the agent; settling first would detach the session
+  // that is about to start the wake run, so the wake run's completion settles instead.
+  const awaitingWake = new Set<ThreadId>();
 
   const settle = Effect.fn("ScheduledRunSettlement.settle")(
     function* (threadId: ThreadId) {
@@ -44,10 +50,15 @@ export const make = Effect.gen(function* () {
       if (entry === undefined) return;
       if (!entry.confirmed) {
         const message = yield* projections.getRunMessage(threadId, entry.runId);
+        const wakesScheduledRun =
+          awaitingWake.delete(threadId) && message?.notification !== undefined;
         const taskId = message?.scheduledTaskId;
         const { tasks } = taskId === undefined ? { tasks: [] } : yield* scheduledTasks.list();
         if (pending.get(threadId) !== entry) return;
-        if (!tasks.some((task) => task.id === taskId && task.autoSettle === true)) {
+        if (
+          !wakesScheduledRun &&
+          !tasks.some((task) => task.id === taskId && task.autoSettle === true)
+        ) {
           pending.delete(threadId);
           return;
         }
@@ -59,7 +70,17 @@ export const make = Effect.gen(function* () {
         if (pending.get(threadId) === entry) pending.delete(threadId);
         return;
       }
-      if (!isAutoSettlementCandidate(thread, DateTime.toEpochMillis(yield* DateTime.now))) return;
+      if (!isAutoSettlementCandidate(thread, DateTime.toEpochMillis(yield* DateTime.now))) {
+        if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) {
+          entry.heldByBackgroundWork = true;
+        }
+        return;
+      }
+      if (entry.heldByBackgroundWork && !entry.backgroundWorkCancelled) {
+        pending.delete(threadId);
+        awaitingWake.add(threadId);
+        return;
+      }
       yield* orchestrator.dispatch({
         type: "thread.auto-settle",
         commandId: CommandId.make(
@@ -90,10 +111,20 @@ export const make = Effect.gen(function* () {
       Stream.runForEach(orchestrator.streamDomainEvents, (event) => {
         if (event.type === "run.updated" && ENDED_RUN_STATUSES.has(event.payload.status)) {
           if (event.payload.status === "completed") {
-            pending.set(event.threadId, { runId: event.payload.id, confirmed: false });
+            pending.set(event.threadId, {
+              runId: event.payload.id,
+              confirmed: false,
+              heldByBackgroundWork: false,
+              backgroundWorkCancelled: false,
+            });
           } else {
             pending.delete(event.threadId);
+            awaitingWake.delete(event.threadId);
           }
+        }
+        if (event.type === "run.background-work-cancelled") {
+          const entry = pending.get(event.threadId);
+          if (entry !== undefined) entry.backgroundWorkCancelled = true;
         }
         return pending.has(event.threadId) ? worker.enqueue(event.threadId) : Effect.void;
       }),

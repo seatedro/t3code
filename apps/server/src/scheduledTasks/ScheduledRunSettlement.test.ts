@@ -4,7 +4,9 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ScheduledTaskId,
   ThreadId,
@@ -26,6 +28,7 @@ import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 const NOW = DateTime.makeUnsafe("2026-10-27T03:00:00.000Z");
 const PROJECT_ID = ProjectId.make("project:test");
+const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 const MODEL = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
 
 function task(id: string, autoSettle: boolean): ScheduledTask {
@@ -140,6 +143,7 @@ function thread(name: string, scheduledTaskId?: string): ThreadFixture {
 const makeHarness = Effect.fn("makeScheduledRunSettlementHarness")(function* (
   threads: ReadonlyArray<ThreadFixture>,
   initialCandidates: ReadonlyArray<ProjectionStore.ProjectionSettlementCandidate>,
+  wakeRunIds: ReadonlyArray<RunId> = [],
 ) {
   const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
   const settled = yield* Queue.unbounded<ThreadId>();
@@ -162,9 +166,17 @@ const makeHarness = Effect.fn("makeScheduledRunSettlementHarness")(function* (
           fixture === undefined
             ? undefined
             : {
-                ...(fixture.scheduledTaskId === undefined
-                  ? {}
-                  : { scheduledTaskId: fixture.scheduledTaskId }),
+                ...(wakeRunIds.includes(runId)
+                  ? {
+                      notification: {
+                        source: { kind: "background_task" as const },
+                        outcome: "completed" as const,
+                        summary: "Background command completed",
+                      },
+                    }
+                  : fixture.scheduledTaskId === undefined
+                    ? {}
+                    : { scheduledTaskId: fixture.scheduledTaskId }),
                 id: MessageId.make(`message:${runId}`),
                 threadId,
                 runId,
@@ -253,6 +265,67 @@ it.effect("waits for awaited background work to end before settling", () =>
           occurredAt: NOW,
           payload: { runId: busy.runId, restartCancelledBackgroundWork: [] },
         });
+        assert.strictEqual(yield* Queue.take(fixture.settled), busy.threadId);
+      }).pipe(Effect.provide(fixture.layer));
+    }),
+  ),
+);
+
+it.effect("leaves settling to the wake run when awaited background work finishes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const busy = thread("waking", "task:auto");
+      const wakeRunId = RunId.make("run:waking:wake");
+      const awaitedCommand = [
+        { kind: "command" as const, taskId: "tests", awaited: true as const },
+      ];
+      const fixture = yield* makeHarness(
+        [busy],
+        [candidate(busy.threadId, busy.runId, awaitedCommand)],
+        [wakeRunId],
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledRunSettlement.make;
+        yield* service.start();
+        yield* Queue.offer(fixture.events, runEnded(busy.threadId, busy.runId, "completed"));
+        yield* Queue.take(fixture.candidateReads);
+
+        yield* Ref.set(fixture.candidates, [candidate(busy.threadId, busy.runId)]);
+        yield* Queue.offer(fixture.events, {
+          id: EventId.make("event:waking:roster-empty"),
+          type: "provider-thread.updated",
+          threadId: busy.threadId,
+          driver: CLAUDE_DRIVER,
+          providerInstanceId: MODEL.instanceId,
+          occurredAt: NOW,
+          payload: {
+            id: ProviderThreadId.make("provider-thread:waking"),
+            driver: CLAUDE_DRIVER,
+            providerInstanceId: MODEL.instanceId,
+            providerSessionId: null,
+            appThreadId: busy.threadId,
+            ownerNodeId: null,
+            nativeThreadRef: null,
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: 1,
+            lastRunOrdinal: 1,
+            handoffIds: [],
+            forkedFrom: null,
+            pendingBackgroundTasks: [],
+            contextUsage: null,
+            nativeMetadata: null,
+            goal: null,
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        });
+        yield* Queue.take(fixture.candidateReads);
+        yield* service.drain;
+        assert.strictEqual(yield* Queue.size(fixture.settled), 0);
+
+        yield* Ref.set(fixture.candidates, [candidate(busy.threadId, wakeRunId)]);
+        yield* Queue.offer(fixture.events, runEnded(busy.threadId, wakeRunId, "completed"));
         assert.strictEqual(yield* Queue.take(fixture.settled), busy.threadId);
       }).pipe(Effect.provide(fixture.layer));
     }),
