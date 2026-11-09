@@ -19,6 +19,7 @@ import * as DesktopCliCommand from "./DesktopCliCommand.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
+import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopHomeOwner from "../backend/DesktopHomeOwner.ts";
@@ -214,12 +215,17 @@ const startLocalBackend = Effect.gen(function* () {
     yield* logBootstrapWarning("bootstrap found another server owning the T3 home", {
       owner: Option.getOrNull(owner),
     });
-    yield* (yield* ElectronDialog.ElectronDialog).showErrorBox(
-      "This T3 home is unavailable",
-      DesktopHomeOwner.homeOwnedMessage(owner),
-    );
-    yield* (yield* ElectronApp.ElectronApp).quit;
-    return false;
+    const { serverVersion } = (yield* DesktopBackendConfiguration.DesktopBackendConfiguration)
+      .stateDirOwnerPaths;
+    // Fork: the backend's code-78 exit attaches to a same-version owner, so let it start.
+    if (!Option.exists(owner, (live) => live.serverVersion === serverVersion)) {
+      yield* (yield* ElectronDialog.ElectronDialog).showErrorBox(
+        "This T3 home is unavailable",
+        DesktopHomeOwner.homeOwnedMessage(owner),
+      );
+      yield* (yield* ElectronApp.ElectronApp).quit;
+      return false;
+    }
   }
 
   const backendPortSelection = yield* resolveDesktopBackendPort(environment.configuredBackendPort);

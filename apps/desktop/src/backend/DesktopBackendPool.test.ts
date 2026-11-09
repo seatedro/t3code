@@ -186,6 +186,7 @@ function layerPool(
           resolvePrimaryLabel: Ref.get(labelRef),
           resolveWsl: () => Effect.die("unexpected WSL config resolve"),
           currentBootstrapToken: Effect.die("unexpected bootstrap token read"),
+          stateDirOwnerPaths: { runtimeStatePath: "", environmentIdPath: "", serverVersion: "" },
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
         DesktopAppSettings.layerTest(),
         DesktopState.layer,

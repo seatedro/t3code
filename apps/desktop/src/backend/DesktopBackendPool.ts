@@ -24,6 +24,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
+import * as DesktopStateDirOwner from "./DesktopStateDirOwner.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
@@ -142,7 +143,7 @@ export const layer = Layer.effect(
     // finds nothing to adopt, so dropping the marker earlier lets it start a competing server.
     const releaseUpdateMarker = Effect.fn("desktop.backendPool.releaseUpdateMarker")(function* (
       httpBaseUrl: URL,
-      pid: number,
+      pid: number | undefined,
     ) {
       const marker = yield* fileSystem.readFileString(updateMarkerPath).pipe(Effect.option);
       if (Option.isNone(marker)) {
@@ -231,6 +232,10 @@ export const layer = Layer.effect(
           Effect.andThen(desktopWindow.handleBackendNotReady),
         ),
       onPreflightFailed: handlePrimaryPreflightFailure,
+      resolveStateDirOwner: (config) =>
+        DesktopStateDirOwner.resolveAttachConfig(config, configuration.stateDirOwnerPaths).pipe(
+          Effect.provide(factoryContext),
+        ),
       onStateDirOwned: () =>
         DesktopHomeOwner.readLiveHomeOwner().pipe(
           Effect.flatMap((owner) =>

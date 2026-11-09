@@ -72,6 +72,7 @@ const layerBackendConfiguration = Layer.succeed(
     resolvePrimaryLabel: Effect.succeed("Windows"),
     resolveWsl: () => Effect.die("unexpected resolveWsl"),
     currentBootstrapToken: Effect.die("unexpected currentBootstrapToken"),
+    stateDirOwnerPaths: { runtimeStatePath: "", environmentIdPath: "", serverVersion: "" },
   } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"],
 );
 

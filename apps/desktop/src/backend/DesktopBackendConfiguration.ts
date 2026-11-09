@@ -24,6 +24,7 @@ import * as DesktopCliShim from "../app/DesktopCliShim.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
+import type * as DesktopStateDirOwner from "./DesktopStateDirOwner.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
@@ -57,6 +58,7 @@ export class DesktopBackendConfiguration extends Context.Service<
     >;
     readonly resolvePrimaryLabel: Effect.Effect<string>;
     readonly currentBootstrapToken: Effect.Effect<string, PlatformError.PlatformError>;
+    readonly stateDirOwnerPaths: DesktopStateDirOwner.StateDirOwnerPaths;
   }
 >()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
 
@@ -865,6 +867,11 @@ export const make = Effect.gen(function* () {
 
   return DesktopBackendConfiguration.of({
     currentBootstrapToken,
+    stateDirOwnerPaths: {
+      runtimeStatePath: environment.path.join(environment.stateDir, "server-runtime.json"),
+      environmentIdPath: environment.path.join(environment.stateDir, "environment-id"),
+      serverVersion: serverPackageJson.version,
+    },
     resolvePrimary: Effect.gen(function* () {
       const { useWsl, wslRequested } = yield* describePrimary;
       if (useWsl) {
