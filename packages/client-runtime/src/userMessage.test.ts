@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerContextId, GuestMessageId, ScheduledTaskId } from "@t3tools/contracts";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 
+import * as DateTime from "effect/DateTime";
+
 import {
+  automationRunHistory,
   resolveUserMessageFileCards,
   resolveUserMessageGrouping,
   resolveUserMessagePresentation,
@@ -232,5 +235,60 @@ describe("resolveUserMessagePresentation", () => {
         scheduledTaskId: "task:daily-audit",
       });
     }
+  });
+});
+
+describe("automationRunHistory", () => {
+  const task = ScheduledTaskId.make("hourly");
+  const at = (seconds: number) => DateTime.makeUnsafe(seconds * 1000);
+  const messages = [
+    { id: "m1", scheduledTaskId: task },
+    { id: "own" },
+    { id: "m2", scheduledTaskId: task },
+    { id: "other", scheduledTaskId: ScheduledTaskId.make("daily") },
+    { id: "m3", scheduledTaskId: task },
+  ];
+  const run = (
+    userMessageId: string,
+    ordinal: number,
+    status: "completed" | "failed" | "running",
+    startedAt: number,
+    completedAt: number | null,
+  ) => ({
+    userMessageId: userMessageId as never,
+    ordinal,
+    status,
+    startedAt: at(startedAt),
+    completedAt: completedAt === null ? null : at(completedAt),
+  });
+  const runs = [
+    run("m1", 1, "completed", 0, 9),
+    run("own", 2, "completed", 100, 200),
+    // A restart continues m2's run; the two are one bar ending in failure.
+    run("m2", 3, "completed", 1000, 1500),
+    run("m2", 4, "failed", 1600, 3999),
+    run("other", 5, "completed", 4000, 4100),
+    run("m3", 6, "running", 5000, null),
+  ];
+
+  it("lists the automation's runs up to the message, longest at full height", () => {
+    const { marks, latest } = automationRunHistory({ messages, runs }, "m3");
+    expect(latest).toBe(true);
+    expect(marks.map(({ failed, open, current }) => ({ failed, open, current }))).toEqual([
+      { failed: false, open: false, current: false },
+      { failed: true, open: false, current: false },
+      { failed: false, open: true, current: true },
+    ]);
+    expect(marks[1]?.level).toBe(1);
+    expect(marks[0]?.level).toBeCloseTo(Math.log1p(9000) / Math.log1p(2_999_000));
+    expect(marks[2]?.level).toBe(0);
+  });
+
+  it("stops at the message, and has nothing for a message no automation sent", () => {
+    expect(automationRunHistory({ messages, runs }, "m1")).toEqual({
+      marks: [{ level: 1, failed: false, open: false, current: true }],
+      latest: false,
+    });
+    expect(automationRunHistory({ messages, runs }, "own")).toEqual({ marks: [], latest: false });
   });
 });

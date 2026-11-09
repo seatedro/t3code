@@ -6,9 +6,11 @@ import {
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
   type OrchestrationV2IdleCompaction,
+  type OrchestrationV2Run,
   type OrchestrationV2UserMessageInputIntent,
   ScheduledTaskId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import {
   isAttachmentOnlyBootstrapPrompt,
   replaceComposerContextReferences,
@@ -135,5 +137,74 @@ export function resolveUserMessageGrouping(
     groupedWithPrevious,
     groupedWithNext: isOwnMessage(message) && isOwnMessage(next),
     continuesSteer: groupedWithPrevious && isSteer(message) && isSteer(previous),
+  };
+}
+
+/** One earlier run of an automation in this thread, as a bar on its card. */
+export interface AutomationRunMark {
+  /** The bar's height from 0 to 1: the run's working time on a log scale against the longest shown. */
+  readonly level: number;
+  readonly failed: boolean;
+  /** Still working, or never started; it has no length yet. */
+  readonly open: boolean;
+  /** The run this card's message started. */
+  readonly current: boolean;
+}
+
+const AUTOMATION_RUN_MARKS = 12;
+
+/**
+ * The runs an automation started in this thread, up to and including the one `messageId` started,
+ * and whether that message is the automation's latest here.
+ */
+export function automationRunHistory(
+  thread: {
+    readonly messages: ReadonlyArray<{
+      readonly id: string;
+      readonly scheduledTaskId?: ScheduledTaskId | undefined;
+    }>;
+    readonly runs: ReadonlyArray<
+      Pick<OrchestrationV2Run, "userMessageId" | "ordinal" | "status" | "startedAt" | "completedAt">
+    >;
+  },
+  messageId: string,
+): { readonly marks: ReadonlyArray<AutomationRunMark>; readonly latest: boolean } {
+  const index = thread.messages.findIndex((message) => message.id === messageId);
+  const taskId = thread.messages[index]?.scheduledTaskId;
+  if (taskId === undefined) return { marks: [], latest: false };
+  const triggers = thread.messages.filter((message) => message.scheduledTaskId === taskId);
+  const position = triggers.findIndex((message) => message.id === messageId);
+  const runsByMessage = new Map<string, Array<(typeof thread.runs)[number]>>();
+  for (const run of thread.runs) {
+    const runs = runsByMessage.get(run.userMessageId) ?? [];
+    runs.push(run);
+    runsByMessage.set(run.userMessageId, runs);
+  }
+  const spans = triggers
+    .slice(Math.max(0, position + 1 - AUTOMATION_RUN_MARKS), position + 1)
+    .map((message) => {
+      // A restarted or continued run carries the same message; together they are one run.
+      const runs = [...(runsByMessage.get(message.id) ?? [])].sort((a, b) => a.ordinal - b.ordinal);
+      const starts = runs.flatMap((run) => (run.startedAt === null ? [] : [run.startedAt]));
+      const ends = runs.flatMap((run) => (run.completedAt === null ? [] : [run.completedAt]));
+      const ms =
+        starts.length === 0 || ends.length < runs.length
+          ? null
+          : Math.max(
+              0,
+              Math.max(...ends.map(DateTime.toEpochMillis)) -
+                Math.min(...starts.map(DateTime.toEpochMillis)),
+            );
+      return { ms, failed: runs.at(-1)?.status === "failed", current: message.id === messageId };
+    });
+  const longest = Math.log1p(Math.max(1, ...spans.map((span) => span.ms ?? 0)));
+  return {
+    marks: spans.map((span) => ({
+      level: span.ms === null ? 0 : Math.log1p(span.ms) / longest,
+      failed: span.failed,
+      open: span.ms === null,
+      current: span.current,
+    })),
+    latest: position === triggers.length - 1,
   };
 }
